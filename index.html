@@ -190,6 +190,24 @@
   }
   .btn .btn-icon { font-size: 11px; line-height: 1; }
   .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  /* UI lock body classes -- dim / block conflicting inner buttons.
+     gen-lock   : a WS generation is streaming; vendor-level edit/retire/close
+                  and row checkboxes would race the server write, so neuter
+                  them without removing visual context.
+     edit-lock  : user has unsaved edits; handled via main-toolbar .disabled
+                  flipped by _applyUILocks (no body-class rules needed here).
+     offline-lock: red dot + toolbar .disabled cover the user-facing story;
+                  no dim on panel interactions since local edit/retire are
+                  allowed even when the server is down. */
+  body.gen-lock #po .vendor-edit,
+  body.gen-lock #po .vendor-retire,
+  body.gen-lock #po .vendor-close {
+    pointer-events: none; opacity: 0.45;
+  }
+  body.gen-lock #po .po-select,
+  body.gen-lock #po .po-select-all {
+    pointer-events: none; opacity: 0.6;
+  }
   .btn-ghost {
     background: transparent; color: var(--muted);
     border: 1px solid var(--border-strong);
@@ -2224,12 +2242,8 @@
     }
   }
   function setRetireBlacklist(arr) {
-    try {
-      const dedup = Array.from(new Set(arr.map(s => String(s).toLowerCase()).filter(Boolean)));
-      localStorage.setItem(RETIRE_KEY, JSON.stringify(dedup));
-    } catch (e) {
-      console.warn('[retire] blacklist save failed:', e);
-    }
+    const dedup = Array.from(new Set(arr.map(s => String(s).toLowerCase()).filter(Boolean)));
+    _safeSetItem(RETIRE_KEY, JSON.stringify(dedup), 'retire');
   }
   function retireProducts(names) {
     if (!Array.isArray(names) || !names.length) return;
@@ -2554,12 +2568,46 @@
     });
   }
 
+  // Coordinated UI gate. Three mutable conditions can race each other:
+  //   offline    -- server unreachable; any network action fails
+  //   generating -- a WS stream is writing _poPanel (onDone.upsertPanelVendor)
+  //   editing    -- user holds unsaved edits in _editingPO
+  // Mixing them causes "I saved and the edit disappeared" bugs. This gate
+  // disables the controls whose interaction would mutate conflicting state
+  // so the three conditions stay pairwise exclusive at the UI boundary.
+  // Body classes drive CSS dimming for dynamically re-rendered inner buttons
+  // (vendor-actions) without hand-flipping .disabled per render.
+  function _applyUILocks() {
+    const offline = _apiOnline === false;
+    const genning = !!generating;
+    const editing = !!_editingPO;
+    document.body.classList.toggle('gen-lock', genning);
+    document.body.classList.toggle('edit-lock', editing);
+    document.body.classList.toggle('offline-lock', offline);
+    // Lazy DOM lookups: declarations for these buttons live further down
+    // in the script, but the gate only runs after user events / probes
+    // so bindings are resolved by call time.
+    const storeEl   = document.getElementById('storeSel');
+    const vendorEl  = document.getElementById('vendorSel');
+    const sendEl    = document.getElementById('sendBtn');
+    const emailEl   = document.getElementById('emailBtn');
+    const refreshEl = document.getElementById('refreshCacheBtn');
+    if (storeEl)   storeEl.disabled   = offline || editing;
+    if (vendorEl)  vendorEl.disabled  = offline || editing || !(storeEl && storeEl.value);
+    if (refreshEl) refreshEl.disabled = offline || genning || editing;
+    if (sendEl)    sendEl.disabled    = offline || editing || genning || !sessionId;
+    if (emailEl) {
+      const contentOk = emailEl.dataset.emailReady === '1';
+      emailEl.disabled = offline || editing || genning || !contentOk;
+    }
+  }
+
   const setBusy = (busy) => {
     generating = busy;
-    sendBtn.disabled = busy || !sessionId;
     // Input stays ENABLED during generation so user can draft a follow-up;
     // send is blocked until generation completes to keep the session sane.
     msgInput.disabled = false;
+    _applyUILocks();
   };
 
   async function loadStores() {
@@ -3012,6 +3060,37 @@
   const drawerListEl = document.getElementById('drawerList');
   const drawerClearEl = document.getElementById('drawerClear');
 
+  // localStorage write with observability. Native setItem fails SILENTLY
+  // on quota exceeded / storage disabled / write truncation, which is how
+  // "I clicked save and saw 'saved', then reload and edits are gone" bugs
+  // happen. This wrapper: (a) try/catch the write, (b) read back + byte
+  // compare to catch non-throwing truncation, (c) surface to the user via
+  // addMsg so a silent fail becomes a visible one. Returns true on verified
+  // write, false on any failure path.
+  function _safeSetItem(key, value, label) {
+    try {
+      localStorage.setItem(key, value);
+      const back = localStorage.getItem(key);
+      if (back !== value) {
+        const msg = (currentLang === 'en'
+          ? `Storage [${label}] verify failed: ${back ? back.length : 0}/${value.length} bytes`
+          : `存储 [${label}] 校验失败: 回读 ${back ? back.length : 0} / 写入 ${value.length} 字节`);
+        console.error('[_safeSetItem]', label, { writeLen: value.length, readLen: back ? back.length : 0 });
+        try { addMsg(msg, 'sys'); } catch (_e) {}
+        return false;
+      }
+      return true;
+    } catch (e) {
+      const reason = (e && e.name === 'QuotaExceededError') ? 'quota' : (e && e.message) || String(e);
+      const msg = (currentLang === 'en'
+        ? `Storage [${label}] write failed: ${reason}`
+        : `存储 [${label}] 写失败: ${reason}`);
+      console.error('[_safeSetItem]', label, e);
+      try { addMsg(msg, 'sys'); } catch (_e) {}
+      return false;
+    }
+  }
+
   const HISTORY_KEY = 'eip_order_history_v1';
   const HISTORY_MAX = 50;      // cap so LocalStorage stays small
   let _orderHistory = [];       // [{id, storeId, storeName, vendorId, vendorName, ts, markdown, cases, amount}]
@@ -3028,7 +3107,14 @@
   // emailBtn + setEmailEnabled hoisted for the same reason -- renderPOPanel
   // enables/disables the email action based on panel content at startup.
   const emailBtn = document.getElementById('emailBtn');
-  const setEmailEnabled = (on) => { if (emailBtn) emailBtn.disabled = !on; };
+  // Track "content-ready" in a data attribute so _applyUILocks can combine
+  // it with offline/gen/edit gates. Direct .disabled assignment used to
+  // fight with the lock coordinator; now the lock is single source of truth.
+  const setEmailEnabled = (on) => {
+    if (!emailBtn) return;
+    emailBtn.dataset.emailReady = on ? '1' : '0';
+    _applyUILocks();
+  };
 
   function loadHistory() {
     try {
@@ -3051,13 +3137,13 @@
     }
   }
   function savePanel() {
-    try {
-      const s = JSON.stringify(_poPanel);
-      localStorage.setItem(PANEL_KEY, s);
+    const s = JSON.stringify(_poPanel);
+    const ok = _safeSetItem(PANEL_KEY, s, 'panel');
+    if (ok) {
       console.debug('[savePanel] %d vendors, %d bytes',
         _poPanel.vendors.length, s.length);
     }
-    catch (e) { console.warn('savePanel failed:', e); }
+    return ok;
   }
 
   function upsertPanelVendor(entry) {
@@ -3102,8 +3188,7 @@
   }
 
   function saveHistory() {
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(_orderHistory)); }
-    catch (e) { console.warn('history save failed', e); }
+    return _safeSetItem(HISTORY_KEY, JSON.stringify(_orderHistory), 'history');
   }
 
   function parseAmountNumber(s) {
@@ -3833,6 +3918,7 @@
   function exitPOEditor(md) {
     _editingPO = null;
     renderPOPanel();
+    _applyUILocks();
   }
 
   savePoBtn.addEventListener('click', () => {
@@ -3842,6 +3928,7 @@
     // Phase-1: editor targets a vendor entry in _poPanel.vendors.
     // targetId is the vendor entry id. Update in place, stay in panel.
     const idx = _poPanel.vendors.findIndex(v => v.id === _editingPO.targetId);
+    let persistOk = true;
     if (idx >= 0) {
       _poPanel.vendors[idx] = {
         ..._poPanel.vendors[idx],
@@ -3850,7 +3937,7 @@
         amount: totals.amount,
         ts: Date.now(),
       };
-      savePanel();
+      persistOk = savePanel();
     } else {
       // Fallback: editor was opened outside a panel entry -- upsert by
       // current store/vendor select.
@@ -3864,8 +3951,27 @@
         ts: Date.now(), markdown: md,
         cases: totals.cases, amount: totals.amount,
       });
+      // Post-verify the fallback write too -- read back from localStorage
+      // and confirm the just-saved markdown is there under the current
+      // (store, vendor). Missing -> something ate the write silently.
+      try {
+        const raw = localStorage.getItem(PANEL_KEY);
+        const panel = raw ? JSON.parse(raw) : {};
+        const saved = (panel.vendors || []).find(v =>
+          v.storeId === sid && v.vendorId === vid);
+        if (!saved || saved.markdown !== md) persistOk = false;
+      } catch (_e) { persistOk = false; }
     }
-    addMsg(t('msg.saved'), 'sys');
+    // Only claim "saved" when the bytes actually made it to disk. When
+    // _safeSetItem fails it already surfaces its own error; we just tell
+    // the user the in-memory edit is volatile.
+    if (persistOk) {
+      addMsg(t('msg.saved'), 'sys');
+    } else {
+      addMsg(currentLang === 'en'
+        ? 'Saved in memory only -- reload will lose edits'
+        : '仅内存保存,刷新会丢失 (localStorage 写失败)', 'sys');
+    }
     exitPOEditor(md);
   });
 
@@ -4292,8 +4398,7 @@
       const items = await resp.json();
       _products = _filterVisibleProducts(items);
       console.log('[autocomplete] fetched + cached:', _products.length);
-      try { localStorage.setItem(key, JSON.stringify({ts: Date.now(), items})); }
-      catch (_e) { /* quota exceeded -- still in memory, just not persisted */ }
+      _safeSetItem(key, JSON.stringify({ts: Date.now(), items}), 'product-cache');
     } catch (e) {
       console.warn('[autocomplete] failed to load store catalog:', e);
     } finally {
@@ -4360,16 +4465,11 @@
       apiStatusDot.classList.add(online ? 'online' : 'offline');
       apiStatusDot.title = online
         ? 'Server online'
-        : 'Server offline -- generate / refresh / email disabled';
+        : 'Server offline -- generate / refresh / email disabled; local view + edit still work';
     }
-    // Store dropdown: disabled when offline (vendor auto-follows via
-    // existing storeSel change handler). sendBtn / cancelBtn / email /
-    // refresh button state still governed by their own flows; only the
-    // dropdown gate is added here per spec.
-    if (storeSel)  storeSel.disabled  = !online;
-    if (vendorSel && !online) vendorSel.disabled = true;
-    // When coming back online, don't force-enable vendorSel -- it stays
-    // disabled until a store is selected (its original logic).
+    // Delegate all button gating to the lock coordinator so offline /
+    // generating / editing compose without stepping on each other.
+    _applyUILocks();
   }
 
   async function _probeApi() {
