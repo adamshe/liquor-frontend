@@ -1258,6 +1258,25 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
+  // ── API base URL: same-origin when the page is itself served by the
+  // FastAPI backend (dev via localhost, cloudflared via lo.*); points
+  // to api.lo.empireintegration.com when the page is on GH Pages at
+  // ui.lo.empireintegration.com. Extend this table for new hosts.
+  const API_BASE = (() => {
+    const h = location.hostname;
+    if (h === 'ui.lo.empireintegration.com') return 'https://api.lo.empireintegration.com';
+    return '';   // same-origin (localhost / lo.* / staging)
+  })();
+  const WS_BASE = (() => {
+    if (!API_BASE) return '';
+    return API_BASE.replace(/^http/, 'ws');  // https -> wss, http -> ws
+  })();
+  // Whether the page and API share the same origin. Controls fetch
+  // credentials: same-origin keeps existing semantics; cross-origin must
+  // switch to 'include' so the cookie flows.
+  const _CROSS_ORIGIN_API = API_BASE !== '';
+  const _FETCH_CREDS = _CROSS_ORIGIN_API ? 'include' : 'same-origin';
+
   // ── i18n scaffold ────────────────────────────────────────────────
   const I18N = {
     zh: {
@@ -2284,7 +2303,7 @@
 
   async function loadStores() {
     try {
-      const r = await fetch('/api/stores');
+      const r = await fetch(API_BASE + '/api/stores');
       const stores = await r.json();
       storeSel.innerHTML = `<option value="" data-i18n="store.select">${t('store.select')}</option>` +
         stores.map(s => `<option value="${s.store_id}">${s.name}</option>`).join('');
@@ -2298,7 +2317,7 @@
     vendorSel.disabled = true;
     vendorSel.innerHTML = '<option value="">加载中…</option>';
     try {
-      const r = await fetch(`/api/stores/${storeId}/vendors`);
+      const r = await fetch(`${API_BASE}/api/stores/${storeId}/vendors`);
       const vendors = await r.json();
       if (!vendors.length) {
         vendorSel.innerHTML = '<option>此门店无供应商</option>';
@@ -2452,8 +2471,11 @@
   }
 
   function _wsBuildURL(storeId, vendorId, resumeSid) {
-    const scheme = (location.protocol === 'https:') ? 'wss:' : 'ws:';
-    let url = scheme + '//' + location.host + '/ws/reorder'
+    // When WS_BASE is set (cross-origin API mode), use it directly.
+    // Otherwise build same-origin WS URL from location.
+    const origin = WS_BASE || (((location.protocol === 'https:') ? 'wss:' : 'ws:')
+                              + '//' + location.host);
+    let url = origin + '/ws/reorder'
       + '?store_id=' + encodeURIComponent(storeId)
       + '&vendor_id=' + encodeURIComponent(vendorId);
     if (resumeSid) url += '&resume=' + encodeURIComponent(resumeSid);
@@ -2666,7 +2688,7 @@
       msgInput.value = '';
       updateModeHint();
       try {
-        const r = await fetch(`/api/stores/${encodeURIComponent(sid)}/product-lookup?name=${encodeURIComponent(msg)}`);
+        const r = await fetch(`${API_BASE}/api/stores/${encodeURIComponent(sid)}/product-lookup?name=${encodeURIComponent(msg)}`);
         const data = await r.json();
         if (!data.found) {
           addMsg(`✗ 没找到「${msg}」`, 'sys');
@@ -3104,7 +3126,7 @@
     // it can't reappear on reload. Next scheduled pre-generation will
     // repopulate naturally when conditions warrant.
     try {
-      const r = await fetch('/api/admin/preorders', { method: 'DELETE' });
+      const r = await fetch(API_BASE + '/api/admin/preorders', { method: 'DELETE' });
       if (!r.ok) addMsg(`清空 preorders 失败: HTTP ${r.status}`, 'sys');
     } catch (e) {
       addMsg('清空 preorders 网络错误: ' + e.message, 'sys');
@@ -3143,7 +3165,7 @@
       const q = sid
         ? `?business_days=7&store_id=${encodeURIComponent(sid)}`
         : `?business_days=7`;
-      const r = await fetch('/api/holidays/upcoming' + q);
+      const r = await fetch(API_BASE + '/api/holidays/upcoming' + q);
       if (!r.ok) return;
       const d = await r.json();
       _upcomingHolidays = d.items || [];
@@ -3186,7 +3208,7 @@
 
   async function loadPreorders() {
     try {
-      const resp = await fetch('/api/admin/preorders');
+      const resp = await fetch(API_BASE + '/api/admin/preorders');
       if (!resp.ok) return;
       const data = await resp.json();
       const items = data.items || [];
@@ -3292,7 +3314,7 @@
     setEmailEnabled(false);
     emailBtn.innerHTML = '<span class="btn-icon">✉</span> 发送中…';
     try {
-      const resp = await fetch('/api/reorder/email', {
+      const resp = await fetch(API_BASE + '/api/reorder/email', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -3822,7 +3844,7 @@
     const sid = storeSel.value;
     if (!sid) { cacheAgeEl.textContent = ''; return; }
     try {
-      const resp = await fetch('/api/admin/cache/stats');
+      const resp = await fetch(API_BASE + '/api/admin/cache/stats');
       if (!resp.ok) return;
       const data = await resp.json();
       const info = data.stores?.[sid];
@@ -3866,7 +3888,7 @@
     let mode = 'full';
     if (!forceFull) {
       try {
-        const stats = await fetch('/api/admin/cache/stats').then(r => r.json());
+        const stats = await fetch(API_BASE + '/api/admin/cache/stats').then(r => r.json());
         const info = stats.stores?.[sid];
         if (info && info.age_seconds < SMART_REFRESH_WINDOW_SEC) {
           mode = 'smart';
@@ -3958,7 +3980,7 @@
       ? 'Loading products, please wait...'
       : '正在加载产品,请稍候...';
     try {
-      const resp = await fetch(`/api/stores/${encodeURIComponent(storeId)}/product-names`);
+      const resp = await fetch(`${API_BASE}/api/stores/${encodeURIComponent(storeId)}/product-names`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const items = await resp.json();
       _products = items.filter(p => p && p.name && p.name.length >= 3);
@@ -4047,9 +4069,9 @@
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 2500);
-      const r = await fetch('/health', {
+      const r = await fetch(API_BASE + '/health', {
         method: 'GET',
-        credentials: 'same-origin',
+        credentials: _FETCH_CREDS,
         signal: ctl.signal,
       });
       clearTimeout(t);
@@ -4096,7 +4118,7 @@
   }
   async function _checkAuthAndStart() {
     try {
-      const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      const r = await fetch(API_BASE + '/api/auth/me', { credentials: _FETCH_CREDS });
       if (r.ok) {
         const d = await r.json();
         if (!d.auth_enabled || d.user) { _startApp(); return; }
@@ -4111,10 +4133,10 @@
     const btn = _loginForm.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
-      const r = await fetch('/api/auth/login', {
+      const r = await fetch(API_BASE + '/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
+        credentials: _FETCH_CREDS,
         body: JSON.stringify({
           username: _loginUser.value.trim(),
           password: _loginPass.value,
