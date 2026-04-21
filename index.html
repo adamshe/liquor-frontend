@@ -1326,6 +1326,14 @@
     });
   }
 
+  // Hoist _apiOnline + probe timer up here so _applyUILocks (below) can
+  // read them safely during init-time renderPOPanel -> setEmailEnabled ->
+  // _applyUILocks call chain. Before the hoist these were declared near
+  // _probeApi far below, which put them in TDZ during the first init
+  // render and threw "Cannot access '_apiOnline' before initialization".
+  let _apiOnline = null;            // tri-state: null/true/false
+  let _apiProbeTimer = null;
+
   // Coordinated UI gate. Three mutable conditions can race each other:
   //   offline    -- server unreachable; any network action fails
   //   generating -- a WS stream is writing _poPanel (onDone.upsertPanelVendor)
@@ -3210,8 +3218,8 @@
   // the user can't attempt actions that require the server. 401 is NOT
   // offline (server reachable, auth expired) -- auth gate handles that.
   const apiStatusDot = document.getElementById('apiStatus');
-  let _apiOnline = null;            // tri-state: null/true/false
-  let _apiProbeTimer = null;
+  // _apiOnline + _apiProbeTimer are hoisted above _applyUILocks for TDZ
+  // safety (see comment there); only the probe intervals live here.
   const _PROBE_ON_INTERVAL  = 120 * 1000;  // 2 min when online (light)
   const _PROBE_OFF_INTERVAL = 30 * 1000;   // 30s when offline (eager reconnect)
 
