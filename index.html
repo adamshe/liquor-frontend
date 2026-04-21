@@ -3231,18 +3231,23 @@
   }
 
   async function _probeApi() {
+    const url = API_BASE + '/health';
+    console.log('[probe] start', { url, creds: _FETCH_CREDS });
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 2500);
-      const r = await fetch(API_BASE + '/health', {
+      const r = await fetch(url, {
         method: 'GET',
         credentials: _FETCH_CREDS,
         signal: ctl.signal,
       });
       clearTimeout(t);
+      const online = r.ok || r.status < 500;
+      console.log('[probe] response', { status: r.status, ok: r.ok, online });
       // Any HTTP response (even 5xx) means server is reachable.
-      _applyApiOnlineState(r.ok || r.status < 500);
-    } catch (_e) {
+      _applyApiOnlineState(online);
+    } catch (e) {
+      console.warn('[probe] fetch error (offline verdict):', e && e.name, e && e.message);
       _applyApiOnlineState(false);
     } finally {
       // Reschedule based on new state.
