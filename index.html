@@ -336,8 +336,8 @@
     overflow: visible;
     text-overflow: clip;
   }
-  /* Override #po table nth-child rules for 6-col layout:
-     1 Product | 2 Stock | 3 Case | 4 Amount | 5 Notes | 6 Priority */
+  /* Override #po table nth-child rules for 7-col layout:
+     1 Product | 2 Select | 3 Stock | 4 Case | 5 Amount | 6 Notes | 7 Priority */
   #po table.po-main-table th:nth-child(1),
   #po table.po-main-table td:nth-child(1) {
     width: 260px;
@@ -346,28 +346,43 @@
   }
   #po table.po-main-table th:nth-child(2),
   #po table.po-main-table td:nth-child(2) {
+    width: 32px; text-align: center;
+    padding: 6px 4px;
+  }
+  #po table.po-main-table th:nth-child(2) input,
+  #po table.po-main-table td:nth-child(2) input {
+    cursor: pointer; accent-color: var(--accent);
+    vertical-align: middle;
+  }
+  #po table.po-main-table th:nth-child(3),
+  #po table.po-main-table td:nth-child(3) {
     width: 70px; text-align: right;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
-  #po table.po-main-table th:nth-child(3),
-  #po table.po-main-table td:nth-child(3) {
-    width: 60px; text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
   #po table.po-main-table th:nth-child(4),
   #po table.po-main-table td:nth-child(4) {
-    width: 95px; text-align: right;
+    width: 60px; text-align: right;
     font-variant-numeric: tabular-nums;
   }
   #po table.po-main-table th:nth-child(5),
   #po table.po-main-table td:nth-child(5) {
-    /* notes: auto fill remaining, wrap */
-    white-space: normal; word-break: break-word;
+    width: 95px; text-align: right;
+    font-variant-numeric: tabular-nums;
   }
   #po table.po-main-table th:nth-child(6),
   #po table.po-main-table td:nth-child(6) {
+    /* notes: auto fill remaining, wrap */
+    white-space: normal; word-break: break-word;
+  }
+  #po table.po-main-table th:nth-child(7),
+  #po table.po-main-table td:nth-child(7) {
     width: 70px; text-align: center;
+  }
+  /* Row-selected highlight -- subtle tint so checked rows are visible
+     without competing with restock/retiree row tints. */
+  #po table.po-main-table tr.row-selected td {
+    background: rgba(204,120,92,0.08);
   }
   /* Sortable headers: pointer + hover tint; arrow indicator via ::after. */
   #po table.po-main-table th.sortable {
@@ -538,13 +553,20 @@
   #po details.vendor-panel > summary {
     cursor: pointer; user-select: none; list-style: none;
     display: grid;
-    /* 5 tracks match table: product | stock | case | amount | notes.
+    /* 6 tracks match body table: product | select | stock | case | amount | notes.
        Last track 1fr absorbs remaining width same as table's auto col. */
-    grid-template-columns: 260px 85px 65px 95px 1fr;
+    grid-template-columns: 260px 32px 85px 65px 95px 1fr;
     align-items: center;
     padding: 8px 12px;
     font-size: 14px; font-weight: 600;
     border-bottom: 1px solid transparent;
+    /* Sticky: when scrolling the body rows, the vendor head (with copy/edit/
+       retire/close actions) stays pinned at the top of the #po scroll area
+       so the user never has to scroll back up to find the commands.
+       Multiple <details> siblings handle their own sticky territory, so
+       scrolling past one vendor cleanly hands over to the next. */
+    position: sticky; top: 0; z-index: 5;
+    background: var(--paper);
   }
   #po details.vendor-panel[open] > summary { border-bottom-color: var(--border); }
   #po details.vendor-panel > summary::-webkit-details-marker { display: none; }
@@ -574,11 +596,11 @@
     font-variant-numeric: tabular-nums;
     font-size: 13px; font-weight: 500;
   }
-  #po .vendor-total-cases { grid-column: 3; color: var(--muted); }
-  #po .vendor-total-amount { grid-column: 4; color: var(--accent); font-weight: 600; }
+  #po .vendor-total-cases { grid-column: 4; color: var(--muted); }
+  #po .vendor-total-amount { grid-column: 5; color: var(--accent); font-weight: 600; }
   #po .vendor-actions { display: inline-flex; gap: 2px; margin-left: 4px; flex: 0 0 auto; }
   /* Touch-friendly: min 36px tap target so iPhone thumbs hit reliably. */
-  #po .vendor-copy, #po .vendor-edit, #po .vendor-close {
+  #po .vendor-copy, #po .vendor-edit, #po .vendor-retire, #po .vendor-close {
     background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: 8px 10px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -586,15 +608,71 @@
     font-size: 18px; line-height: 1;
     min-width: 36px; min-height: 36px;
   }
-  #po .vendor-copy svg, #po .vendor-close svg, #po .vendor-edit svg {
+  #po .vendor-copy svg, #po .vendor-close svg, #po .vendor-edit svg, #po .vendor-retire svg {
     width: 18px; height: 18px;
     pointer-events: none;  /* click always lands on the button */
   }
   #po .vendor-copy:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   #po .vendor-edit:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  #po .vendor-retire:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  #po .vendor-retire:disabled { opacity: 0.35; cursor: not-allowed; }
+  #po .vendor-retire:disabled:hover { color: var(--muted); background: transparent; }
   #po .vendor-close:hover { color: var(--danger); background: rgba(200,74,74,0.10); }
   #po .vendor-copy.copied { color: var(--tone-final, #5a9a3a); }
   #po .vendor-panel-body { padding: 4px 12px 10px; }  /* match summary padding-left/right so grid cols align with table cols */
+
+  /* Retire blacklist panel: collapsible, sits below vendor panels.
+     Local-only for now -- see SQL comment in JS for planned DB schema. */
+  #po details.retire-panel {
+    margin: 16px 0 8px;
+    padding: 0;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--paper);
+    color: var(--text);
+  }
+  #po details.retire-panel > summary {
+    cursor: pointer; user-select: none; list-style: none;
+    padding: 8px 12px;
+    font-weight: 600; color: var(--muted);
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #po details.retire-panel > summary::-webkit-details-marker { display: none; }
+  #po details.retire-panel > summary::before {
+    content: '\25B8'; display: inline-block;
+    transition: transform 0.15s; color: var(--muted);
+  }
+  #po details.retire-panel[open] > summary::before { transform: rotate(90deg); }
+  #po .retire-hint {
+    padding: 0 14px 4px; color: var(--muted); font-size: 12px;
+  }
+  #po .retire-list {
+    list-style: none; margin: 4px 0 10px; padding: 0 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 4px;
+  }
+  #po .retire-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; gap: 8px;
+    background: rgba(204,120,92,0.05);
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  #po .retire-item .retire-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  #po .retire-restore {
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: 4px 6px; border-radius: 4px;
+    display: inline-flex; align-items: center;
+    transition: color 0.12s, background 0.12s;
+    flex: 0 0 auto;
+  }
+  #po .retire-restore svg { width: 14px; height: 14px; pointer-events: none; }
+  #po .retire-restore:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   /* Mobile: allow horizontal scroll instead of squashing columns */
   @media (max-width: 600px) {
     .po { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1311,6 +1389,11 @@
       'tooltip.edit': '编辑', 'tooltip.delete': '删除',
       'tooltip.back_to_drawer': '移到订单 bucket',
       'tooltip.to_panel': '移到订单面板',
+      'tooltip.retire_selected': '退役选中项 (仅本机)',
+      'tooltip.select_all': '全选 / 取消全选',
+      'tooltip.restore': '恢复',
+      'retire.title': '已退役 (本机)',
+      'retire.hint': '仅本机记录;未同步到服务器。清浏览器数据会丢失。',
       'msg.saved': '已保存',
       'section.urgent': '急需',
       'section.volatile': '波动',
@@ -1341,6 +1424,11 @@
       'tooltip.edit': 'Edit', 'tooltip.delete': 'Delete',
       'tooltip.back_to_drawer': 'Move to order bucket',
       'tooltip.to_panel': 'Move to order panel',
+      'tooltip.retire_selected': 'Retire selected (local only)',
+      'tooltip.select_all': 'Select / deselect all',
+      'tooltip.restore': 'Restore',
+      'retire.title': 'Retired (local)',
+      'retire.hint': 'Local-only; not synced to server. Clearing browser data loses this.',
       'msg.saved': 'Saved',
       'section.urgent': 'Urgent',
       'section.volatile': 'Volatile',
@@ -1536,8 +1624,10 @@
   const ICON_COPY = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
   const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
   const ICON_TRASH = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path></svg>';
-  const ICON_ARROW_LEFT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>';
-  const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+  const ICON_ARROW_LEFT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>';
+  const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
+  // Archive-style box for retire: not destructive (restorable), unlike trash.
+  const ICON_ARCHIVE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"></path><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
   const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -2097,13 +2187,126 @@
     return copy;
   }
 
+  // ── Retire blacklist (local-only, staged for DB migration) ────────
+  // Products added here are hidden from all PO main tables across every
+  // vendor until restored via the retire panel. Storage is localStorage:
+  // not synced across devices, lost on cache clear. Acceptable for v1.
+  //
+  // When moving to server-side persistence, an endpoint like
+  // POST /api/admin/retire + DELETE /api/admin/retire/{name} writes into
+  // a table roughly shaped like the SQL below. Table name is a placeholder
+  // -- pick at migration time.
+  //
+  //   -- Suggested schema (SQL Server, adjust for your SQL dialect):
+  //   CREATE TABLE {{retire_blacklist_table}} (
+  //     store_id     NVARCHAR(8)   NOT NULL,
+  //     product_name NVARCHAR(200) NOT NULL,
+  //     created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+  //     created_by   NVARCHAR(50)  NULL,
+  //     PRIMARY KEY (store_id, product_name)
+  //   );
+  //   -- Read:   SELECT product_name FROM {{retire_blacklist_table}}
+  //   --          WHERE store_id = :store_id;
+  //   -- Add:    INSERT INTO {{retire_blacklist_table}}
+  //   --          (store_id, product_name, created_by)
+  //   --          VALUES (:store_id, :product_name, :created_by);
+  //   -- Remove: DELETE FROM {{retire_blacklist_table}}
+  //   --          WHERE store_id = :store_id AND product_name = :product_name;
+  const RETIRE_KEY = 'eip_retire_blacklist';
+  function getRetireBlacklist() {
+    try {
+      const raw = localStorage.getItem(RETIRE_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      console.warn('[retire] blacklist parse failed:', e);
+      return [];
+    }
+  }
+  function setRetireBlacklist(arr) {
+    try {
+      const dedup = Array.from(new Set(arr.map(s => String(s).toLowerCase()).filter(Boolean)));
+      localStorage.setItem(RETIRE_KEY, JSON.stringify(dedup));
+    } catch (e) {
+      console.warn('[retire] blacklist save failed:', e);
+    }
+  }
+  function retireProducts(names) {
+    if (!Array.isArray(names) || !names.length) return;
+    const cur = new Set(getRetireBlacklist());
+    for (const n of names) if (n) cur.add(String(n).toLowerCase());
+    setRetireBlacklist(Array.from(cur));
+    refreshRetireUI();
+  }
+  function unretireProduct(name) {
+    const lower = String(name || '').toLowerCase();
+    if (!lower) return;
+    const next = getRetireBlacklist().filter(n => n !== lower);
+    setRetireBlacklist(next);
+    refreshRetireUI();
+  }
+  // Mirror "any row checked?" -> vendor-retire button disabled. Called
+  // after every table re-render (blacklist change, sort) + on checkbox
+  // click. Cheap: one querySelector per vendor panel.
+  function _syncVendorRetireEnabled(anyElt) {
+    const vendor = anyElt && anyElt.closest ? anyElt.closest('.vendor-panel') : null;
+    if (!vendor) return;
+    const btn = vendor.querySelector('.vendor-retire');
+    if (!btn) return;
+    btn.disabled = !vendor.querySelector('.po-main-wrap .po-select:checked');
+  }
+  // Re-render every po-main-wrap using its cached viewState, then rebuild
+  // the retire panel. Called after any blacklist mutation so views stay
+  // coherent without a full server round-trip.
+  function refreshRetireUI() {
+    document.querySelectorAll('.po-main-wrap').forEach(w => {
+      if (w._poViewState) {
+        w.innerHTML = renderPOTable(w._poViewState.rows, w._poViewState.sort);
+        _syncVendorRetireEnabled(w);
+      }
+    });
+    renderRetirePanel();
+  }
+  // Render (or remove) a single retire-panel inside poBody. Idempotent.
+  function renderRetirePanel() {
+    if (!poBody) return;
+    let panel = document.getElementById('retire-panel');
+    const list = getRetireBlacklist().slice().sort();
+    if (!list.length) {
+      if (panel) panel.remove();
+      return;
+    }
+    if (!panel) {
+      panel = document.createElement('details');
+      panel.id = 'retire-panel';
+      panel.className = 'retire-panel';
+      poBody.appendChild(panel);
+    }
+    const items = list.map(n =>
+      `<li class="retire-item">
+        <span class="retire-name" title="${escapeHtml(n)}">${escapeHtml(n)}</span>
+        <button class="retire-restore" data-name="${escapeHtml(n)}" title="${t('tooltip.restore')}" aria-label="${t('tooltip.restore')}">${ICON_ARROW_RIGHT}</button>
+       </li>`
+    ).join('');
+    panel.innerHTML =
+      `<summary>${t('retire.title')} (${list.length})</summary>
+       <div class="retire-hint">${t('retire.hint')}</div>
+       <ul class="retire-list">${items}</ul>`;
+  }
+
   // ── renderPOTable: pure function, state -> HTML string ────────────
-  // Columns: Product | Stock | Case | Amount | Notes | Priority.
+  // Columns: Product | Select | Stock | Case | Amount | Notes | Priority.
   // Headers are sortable (click -> toggle dir; handled in next commit).
   // Restock highlight class applied at render time from _products cache
   // (reorder_level > qty_on_hand -> row class "row-restock-high").
   function renderPOTable(rows, sortCfg) {
     const sorted = sortRows(rows, sortCfg);
+    // Retire blacklist filter: rows matching a retired product name are hidden
+    // here (not deleted from state.rows) so unretiring restores them cheaply.
+    const retired = new Set(getRetireBlacklist().map(s => s.toLowerCase()));
+    const visible = retired.size
+      ? sorted.filter(r => !retired.has((r.product || '').toLowerCase()))
+      : sorted;
     const prodMeta = new Map();
     for (const p of (_products || [])) {
       if (p && p.name) prodMeta.set(p.name.toLowerCase(), p);
@@ -2113,14 +2316,20 @@
       if (cur.col !== col || cur.dir == null) return '';
       return cur.dir === 'asc' ? ' sort-asc' : ' sort-desc';
     };
-    const head = [
+    // Sortable columns, in display order. The select column is injected
+    // between product (col 1) and stock (col 3) below, OUTSIDE this list so
+    // its <th> gets neither .sortable nor data-col (click won't trigger sort).
+    const sortableHead = [
       ['product',  'PRODUCT'],  ['stock',    'STOCK'],
       ['cases',    'CASE'],     ['amount',   'AMOUNT'],
       ['notes',    'NOTES'],    ['priority', 'PRIORITY'],
     ].map(([k, label]) =>
       `<th class="sortable col-${k}${sortClass(k)}" data-col="${k}">${label}</th>`
-    ).join('');
-    const body = sorted.map((r) => {
+    );
+    const selectTh = `<th class="col-select"><input type="checkbox" class="po-select-all" title="${t('tooltip.select_all')}" aria-label="${t('tooltip.select_all')}"></th>`;
+    sortableHead.splice(1, 0, selectTh);   // after product, before stock
+    const head = sortableHead.join('');
+    const body = visible.map((r) => {
       const meta = prodMeta.get(r.product.toLowerCase());
       const restock = meta && (meta.reorder_level || 0) > 0
                             && (meta.qty_on_hand || 0) < meta.reorder_level;
@@ -2136,6 +2345,7 @@
                      : '正常';
       return `<tr${cls}${titleAttr}>
         <td class="col-product">${escapeHtml(r.product)}</td>
+        <td class="col-select"><input type="checkbox" class="po-select" data-product="${escapeHtml(r.product)}"></td>
         <td class="col-stock">${escapeHtml(String(stock))}</td>
         <td class="col-cases">${r.cases}</td>
         <td class="col-amount">${escapeHtml(amt)}</td>
@@ -2145,7 +2355,7 @@
     }).join('');
     return `<table class="po-main-table" data-new-table="1">
       <thead><tr>${head}</tr></thead>
-      <tbody>${body || '<tr><td colspan="6" class="placeholder">_(无订单行)_</td></tr>'}</tbody>
+      <tbody>${body || '<tr><td colspan="7" class="placeholder">_(无订单行)_</td></tr>'}</tbody>
     </table>`;
   }
 
@@ -2171,6 +2381,8 @@
     const state = wrapper._poViewState;
     state.sort = _toggleSort(state.sort, th.dataset.col);
     wrapper.innerHTML = renderPOTable(state.rows, state.sort);
+    // Re-render resets row checkboxes -> keep retire button in sync.
+    _syncVendorRetireEnabled(wrapper);
   });
 
   // Parse first <table> and REPLACE it with the new data-driven table.
@@ -2974,6 +3186,7 @@
       poBody.className = '';
       poBody.innerHTML = `<div class="placeholder">${t('placeholder.po_init')}</div>`;
       setEmailEnabled(false);
+      renderRetirePanel();
       return;
     }
     poBody.className = '';
@@ -3012,6 +3225,7 @@
             <span class="vendor-actions">
               <button class="vendor-copy" data-id="${id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
               <button class="vendor-edit" data-id="${id}" title="${t('tooltip.edit')}" aria-label="${t('tooltip.edit')}">${t_edit()}</button>
+              <button class="vendor-retire" data-id="${id}" title="${t('tooltip.retire_selected')}" aria-label="${t('tooltip.retire_selected')}" disabled>${ICON_ARCHIVE}</button>
               <button class="vendor-close" data-id="${id}" title="${t('tooltip.back_to_drawer')}" aria-label="${t('tooltip.back_to_drawer')}">${ICON_ARROW_LEFT}</button>
             </span>
           </span>
@@ -3055,6 +3269,7 @@
       if (k in openStates) d.open = openStates[k];
     });
     setEmailEnabled(displayVendors.some(v => v.markdown && v.markdown.length > 50));
+    renderRetirePanel();
   }
 
   // Placeholder for an "Edit" glyph -- use a plain pencil-like char for now.
@@ -3631,6 +3846,49 @@
 
   poBody.addEventListener('click', async (e) => {
     // Multi-vendor panel -- vendor-level controls.
+    // Retire: add every checked row's product to the blacklist.
+    const vendorRetire = e.target.closest('.vendor-retire');
+    if (vendorRetire) {
+      e.preventDefault(); e.stopPropagation();
+      if (vendorRetire.disabled) return;
+      const vendor = vendorRetire.closest('.vendor-panel');
+      if (!vendor) return;
+      const checks = vendor.querySelectorAll('.po-main-wrap .po-select:checked');
+      const names = Array.from(checks).map(c => c.dataset.product).filter(Boolean);
+      if (!names.length) return;
+      retireProducts(names);
+      return;
+    }
+    // Select-all header checkbox: toggle every .po-select in the same wrap.
+    const selAll = e.target.closest('.po-select-all');
+    if (selAll) {
+      const wrap = selAll.closest('.po-main-wrap');
+      if (!wrap) return;
+      const want = selAll.checked;
+      wrap.querySelectorAll('.po-select').forEach(cb => {
+        cb.checked = want;
+        const tr = cb.closest('tr');
+        if (tr) tr.classList.toggle('row-selected', want);
+      });
+      _syncVendorRetireEnabled(wrap);
+      return;
+    }
+    // Individual row checkbox: toggle row-selected tint + sync retire state.
+    // (No preventDefault: let the browser handle the checkbox toggle.)
+    const rowSel = e.target.closest('.po-select');
+    if (rowSel) {
+      const tr = rowSel.closest('tr');
+      if (tr) tr.classList.toggle('row-selected', rowSel.checked);
+      _syncVendorRetireEnabled(rowSel);
+      return;
+    }
+    // Restore from retire panel.
+    const restoreBtn = e.target.closest('.retire-restore');
+    if (restoreBtn) {
+      e.preventDefault(); e.stopPropagation();
+      unretireProduct(restoreBtn.dataset.name);
+      return;
+    }
     const vendorClose = e.target.closest('.vendor-close');
     if (vendorClose) {
       e.preventDefault(); e.stopPropagation();
