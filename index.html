@@ -1,0 +1,4143 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#faf9f5">
+<title>Smart Reorder</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Claude AI inspired palette — warm cream + orange accent */
+    /* Palette: page canvas stays the original warm off-white; all panels
+       (topbar, chat, inputbar, dropdowns) use cream (no pure white); PO
+       panels lifted on --paper with warm shadow. */
+    --bg: #f5f0e4;
+    --panel: #faf3e1;
+    --panel2: #ebe2ca;
+    --paper: #fdf7e8;
+    --paper-shadow: 0 1px 2px rgba(120,80,50,0.06), 0 3px 10px rgba(120,80,50,0.05);
+    --text: #2b2a26;
+    --muted: #6f6d64;
+    --accent: #cc785c;         /* Claude's warm orange */
+    --accent-hover: #b56748;
+    --accent2: #659466;        /* subdued success green */
+    --danger: #c84a4a;
+    --border: #dbd0b4;
+    --border-strong: #c5bc9e;
+    --radius: 10px;
+    --pad: 14px;
+    --font-serif: "Source Serif 4", Charter, "Iowan Old Style", Georgia, serif;
+    --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); height: 100%; }
+  body { font: 15px/1.55 var(--font-ui); }
+  #app {
+    display: flex; flex-direction: column; height: 100vh; height: 100dvh;
+    max-width: 960px; margin: 0 auto;
+    background: var(--bg);
+  }
+
+  .topbar {
+    display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px;
+    padding: var(--pad); background: var(--panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 3;
+  }
+  .topbar select {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius);
+    background: var(--panel); color: var(--text); border: 1px solid var(--border-strong);
+    font: 15px/1.4 var(--font-ui);
+    transition: border-color 0.15s;
+  }
+  .topbar select:hover { border-color: var(--accent); }
+  .topbar select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(204,120,92,0.15); }
+  .topbar select.lang-select { width: auto; min-width: 96px; font-size: 13px; padding: 10px 10px; }
+
+  .po {
+    flex: 0 0 auto;
+    height: calc(78vh + 10px);
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0 14px 6px;
+    overflow: auto;
+    resize: vertical;
+    min-height: 120px;
+    max-height: 90vh;
+    margin-bottom: 3px;
+    font-family: var(--font-serif);
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--text);
+    white-space: normal;
+    word-break: break-word;
+  }
+  #po > * { margin-top: 0; margin-bottom: 0; }
+  #po > * + * { margin-top: 2px; }
+  .po h3 {
+    margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: 1.5px; color: var(--muted);
+    font-family: var(--font-ui); font-weight: 600;
+  }
+  /* PO toolbar — rigid 3-column grid: [title] [meta flexible] [actions]
+     Grid guarantees exactly ONE row regardless of content width.
+     Only the middle (meta) cell can overflow; title and actions never reflow. */
+  .po-toolbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-ui);
+    height: 26px;              /* tight — no vertical reflow ever */
+    background: var(--panel);
+  }
+  .po-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.4px;
+    color: var(--muted); font-weight: 600;
+    line-height: 1; white-space: nowrap;
+  }
+  .po-meta {
+    display: flex; gap: 10px; align-items: center;
+    padding-left: 10px;
+    font-size: 11px; color: var(--muted); line-height: 1;
+    min-width: 0;               /* allow grid cell to shrink rather than push */
+    overflow: hidden;           /* clip overflowing text, don't reflow siblings */
+    white-space: nowrap;
+  }
+  .po-meta > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .po-meta #timer { color: #8a8a80; }
+  /* Holiday proximity reminder, sits inline next to po-title. */
+  .holiday-banner {
+    display: inline-block;
+    margin-left: 14px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(232,133,94,0.14);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 60vw;
+    cursor: default;
+  }
+  .holiday-banner.urgent { background: rgba(214,106,91,0.18); color: var(--danger); }
+  .holiday-banner.today { background: rgba(214,106,91,0.30); color: #fff; }
+
+  /* Animated analog clock — pure CSS, no SVG.
+     Size 20px to fit within 26px po-toolbar without clipping. */
+  .clock-spin {
+    display: inline-block; position: relative;
+    width: 20px; height: 20px;
+    margin-left: 6px; vertical-align: middle;
+    border: 1.5px solid currentColor; border-radius: 50%;
+    box-sizing: border-box;
+  }
+  .clock-spin::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 2.5px; height: 2.5px; border-radius: 50%;
+    background: currentColor; transform: translate(-50%, -50%);
+    z-index: 2;
+  }
+  .clock-spin .hand {
+    position: absolute; left: 50%; top: 50%;
+    transform-origin: 50% 100%;
+    background: currentColor;
+  }
+  .clock-spin .hand-min  { width: 1.4px; height: 6px; margin-left: -0.7px; margin-top: -6px; animation: clock-spin 3600s linear infinite; }
+  .clock-spin .hand-sec  { width: 0.8px; height: 8px; margin-left: -0.4px; margin-top: -8px; background: #c0392b; animation: clock-spin 60s steps(60, end) infinite; }
+  /* When paused, stop both hands (set via .paused class on the container) */
+  .clock-spin.paused .hand-min,
+  .clock-spin.paused .hand-sec {
+    animation-play-state: paused;
+  }
+  @keyframes clock-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .cache-check {
+    display: inline-block; margin-left: 6px; color: #2e7d32; font-weight: 700;
+    animation: cache-pop 0.4s ease-out;
+  }
+  @keyframes cache-pop {
+    0% { transform: scale(0.2); opacity: 0; }
+    60% { transform: scale(1.25); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .po-actions {
+    display: flex; gap: 6px; align-items: center;
+    white-space: nowrap;
+  }
+  /* Unified tiny buttons */
+  .btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 0 9px;
+    height: 22px;
+    font: 500 11px/1 var(--font-ui);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+    white-space: nowrap;
+  }
+  .btn .btn-icon { font-size: 11px; line-height: 1; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border-strong);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--panel2); color: var(--text); }
+  .btn-secondary {
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .btn-secondary:hover:not(:disabled) { background: rgba(204,120,92,0.08); }
+  .btn-cancel {
+    background: transparent; color: var(--danger, #c62828);
+    border: 1px solid var(--danger, #c62828); font-weight: 600;
+  }
+  .btn-cancel:hover { background: rgba(198,40,40,0.08); }
+  .btn-primary {
+    background: var(--accent2); color: #fff;
+    border: 1px solid var(--accent2);
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) { background: #4f7f51; border-color: #4f7f51; }
+  .po .placeholder { color: var(--muted); font-style: italic; }
+  .po tr.retiree td { background: #fff7c2 !important; }
+  /* Rows where proposed cases * qty_per_case (bottles) > qty_on_hand (bottles).
+     Warm amber tint signals "real restock" vs. top-up. */
+  .po tr.row-restock-high td { background: rgba(235, 168, 78, 0.18) !important; }
+  .po .retiree-tag {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    background: #d4a017; color: #fff; font-size: 11px; font-weight: 700;
+    border-radius: 3px; vertical-align: middle;
+  }
+  .po .cat-badge {
+    display: inline-block; padding: 1px 6px;
+    font-size: 10px; font-weight: 700; border-radius: 3px;
+    vertical-align: middle; white-space: nowrap;
+    float: right; margin-left: 8px;
+  }
+  .po .cat-urgent   { background: #c0392b; color: #fff; }
+  .po .cat-volatile { background: #e67e22; color: #fff; }
+  .po .cat-standard { background: #7f8c8d; color: #fff; }
+  .po tr.no-purchase td { background: #ffe4cc !important; }
+  .po .no-purchase-tag {
+    display: inline-block; margin-left: 6px; padding: 1px 6px;
+    background: #e67e22; color: #fff; font-size: 11px; font-weight: 700;
+    border-radius: 3px; vertical-align: middle;
+  }
+  .po .streaming::after {
+    content: "▋"; color: var(--accent); animation: blink 1s step-end infinite; margin-left: 1px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .chat-wrap {
+    flex: 1 1 auto; min-height: 0;
+    position: relative;       /* anchor for the absolute autocomplete */
+    display: flex; flex-direction: column;
+  }
+  .chat {
+    flex: 1 1 auto; overflow-y: auto;
+    /* Bottom padding = log-panel summary height (~22px) + 3px gap to
+       inputbar + 5px gap from chat content to log-panel top. */
+    padding: var(--pad) var(--pad) 30px;
+    background: var(--bg);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .msg {
+    max-width: 85%; padding: 4px 10px; border-radius: var(--radius);
+    word-wrap: break-word; white-space: pre-wrap;
+    font-family: var(--font-ui);
+    line-height: 1.25;
+  }
+  .msg.user {
+    align-self: flex-end; background: var(--accent); color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.ai {
+    align-self: flex-start; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-bottom-left-radius: 4px;
+    font-family: var(--font-serif); font-size: 15px;
+  }
+  .msg.sys { align-self: center; color: var(--muted); font-size: 12px; background: transparent; padding: 2px 6px; }
+
+  .inputbar {
+    display: flex; gap: 8px; padding: var(--pad);
+    background: var(--panel); border-top: 1px solid var(--border);
+    padding-bottom: calc(var(--pad) + env(safe-area-inset-bottom));
+  }
+  .inputbar input {
+    flex: 1; padding: 12px 14px; border-radius: var(--radius);
+    background: var(--panel); color: var(--text); border: 1px solid var(--border-strong);
+    font: 15px/1.4 var(--font-ui);
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .inputbar input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(204,120,92,0.15); }
+  .inputbar button {
+    padding: 0 18px; border-radius: var(--radius); border: none;
+    background: var(--accent); color: #fff; font-weight: 600; font-size: 14px;
+    font-family: var(--font-ui); cursor: pointer;
+    transition: background 0.15s;
+  }
+  .inputbar button:hover:not(:disabled) { background: var(--accent-hover); }
+  .inputbar button:disabled { opacity: 0.35; cursor: not-allowed; }
+  /* Markdown table -- 4-col layout: PRODUCT | CASES | AMOUNT | NOTES.
+     All widths in px so summary grid + table align reliably across font
+     weights. Notes col absorbs remaining width (width:100% + fixed
+     layout + no explicit notes width). */
+  #po table { border-collapse: collapse; margin: 0.5em 0; width: 100%;
+              table-layout: fixed;
+              font-size: 14px; color: var(--text); background: transparent;
+              font-family: var(--font-ui); }
+  #po th, #po td { border-bottom: 1px solid var(--border);
+                   padding: 10px 12px; text-align: left;
+                   line-height: 1.5; vertical-align: middle;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 5-col: PRODUCT | STOCK | CASE | AMOUNT | NOTES.
+     Widths tuned so typical 45-char product names + "STOCK" header fit
+     on one line. Notes col auto -> absorbs remaining panel width. */
+  #po table th:first-child, #po table td:first-child {
+    width: 260px;
+    /* Long product names wrap to multiple lines instead of ellipsis. */
+    white-space: normal;
+    word-break: break-word;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  #po table th:nth-child(2), #po table td:nth-child(2) {
+    width: 85px; text-align: right; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #po table th:nth-child(3), #po table td:nth-child(3) { width: 65px; }
+  #po table th:nth-child(4), #po table td:nth-child(4) { width: 95px; }
+  #po table th:nth-child(3), #po table td:nth-child(3),
+  #po table th:nth-child(4), #po table td:nth-child(4) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  /* ── New 6-col data-driven PO gen table (po-main-table) ─────────── */
+  #po .po-main-wrap { width: 100%; }
+  #po table.po-main-table {
+    table-layout: fixed;
+  }
+  /* Override base #po th ellipsis so header labels show in full. */
+  #po table.po-main-table th {
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  /* Override #po table nth-child rules for 6-col layout:
+     1 Product | 2 Stock | 3 Case | 4 Amount | 5 Notes | 6 Priority */
+  #po table.po-main-table th:nth-child(1),
+  #po table.po-main-table td:nth-child(1) {
+    width: 260px;
+    white-space: normal; word-break: break-word;
+    overflow: visible; text-overflow: clip;
+  }
+  #po table.po-main-table th:nth-child(2),
+  #po table.po-main-table td:nth-child(2) {
+    width: 70px; text-align: right;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  #po table.po-main-table th:nth-child(3),
+  #po table.po-main-table td:nth-child(3) {
+    width: 60px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  #po table.po-main-table th:nth-child(4),
+  #po table.po-main-table td:nth-child(4) {
+    width: 95px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  #po table.po-main-table th:nth-child(5),
+  #po table.po-main-table td:nth-child(5) {
+    /* notes: auto fill remaining, wrap */
+    white-space: normal; word-break: break-word;
+  }
+  #po table.po-main-table th:nth-child(6),
+  #po table.po-main-table td:nth-child(6) {
+    width: 70px; text-align: center;
+  }
+  /* Sortable headers: pointer + hover tint; arrow indicator via ::after. */
+  #po table.po-main-table th.sortable {
+    cursor: pointer; user-select: none; position: relative;
+    padding-right: 20px;
+  }
+  #po table.po-main-table th.sortable:hover {
+    background: rgba(204,120,92,0.10);
+  }
+  #po table.po-main-table th.sortable::after {
+    content: '';
+    position: absolute; right: 6px; top: 50%;
+    width: 0; height: 0;
+    border: 4px solid transparent;
+    opacity: 0.25;
+    transform: translateY(-50%);
+  }
+  #po table.po-main-table th.sortable.sort-asc::after {
+    border-bottom-color: currentColor;
+    border-top-width: 0;
+    opacity: 1;
+    transform: translateY(-65%);
+  }
+  #po table.po-main-table th.sortable.sort-desc::after {
+    border-top-color: currentColor;
+    border-bottom-width: 0;
+    opacity: 1;
+    transform: translateY(-35%);
+  }
+  /* Priority column badges: colored pill per category. */
+  #po .prio-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11px; font-weight: 700;
+    border-radius: 10px; letter-spacing: 0.02em;
+    line-height: 1.4;
+  }
+  #po .prio-badge.prio-u { background: #c0392b; color: #fff; }
+  #po .prio-badge.prio-h { background: #e67e22; color: #fff; }
+  #po .prio-badge.prio-n { background: #7f8c8d; color: #fff; }
+  /* ── API connection status dot ──────────────────────────────── */
+  .api-status {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .api-status.online   { background: #2e7d32; box-shadow: 0 0 0 2px rgba(46,125,50,0.20); }
+  .api-status.offline  { background: var(--danger); box-shadow: 0 0 0 2px rgba(200,74,74,0.22); }
+  .api-status.checking { background: var(--muted); box-shadow: 0 0 0 2px rgba(111,109,100,0.22); }
+
+  /* ── Login overlay ──────────────────────────────────────────── */
+  .login-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .login-card {
+    width: 100%; max-width: 340px;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 28px 24px 22px;
+    box-shadow: 0 8px 24px rgba(43,42,38,0.12);
+    font-family: var(--font-ui);
+  }
+  .login-title {
+    margin: 0 0 18px; font-size: 20px; font-weight: 600;
+    color: var(--text); letter-spacing: 0.02em;
+  }
+  .login-field { margin-bottom: 14px; }
+  .login-field label {
+    display: block; margin-bottom: 6px;
+    font-size: 12px; color: var(--muted); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .login-field input {
+    width: 100%; box-sizing: border-box;
+    padding: 9px 11px; border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--panel); color: var(--text);
+    font: inherit;
+  }
+  .login-field input:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(204,120,92,0.18);
+  }
+  .login-remember {
+    display: flex; align-items: center; gap: 8px;
+    margin: 4px 0 14px;
+    font-size: 13px; color: var(--muted);
+    cursor: pointer; user-select: none;
+  }
+  .login-remember input[type="checkbox"] {
+    width: 16px; height: 16px; accent-color: var(--accent);
+    cursor: pointer; margin: 0;
+  }
+  .login-error {
+    margin: 0 0 12px; padding: 8px 10px;
+    background: rgba(200,74,74,0.10); border: 1px solid rgba(200,74,74,0.35);
+    color: var(--danger); border-radius: 4px;
+    font-size: 13px;
+  }
+  .login-submit {
+    width: 100%; padding: 10px 16px;
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 6px; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  .login-submit:hover { background: var(--accent-hover); }
+  .login-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Section accordions in markdown (read-only) view. Each vendor/order/
+     retire banner becomes a collapsible <details>, mirroring the editor. */
+  #po details.po-view-section { margin: 10px 0 4px; }
+  #po details.po-view-section > summary {
+    cursor: pointer; user-select: none;
+    list-style: none;
+    padding: 4px 0;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  #po details.po-view-section > summary::-webkit-details-marker { display: none; }
+  #po details.po-view-section > summary::before {
+    content: '\25B8';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 0.15s;
+    color: var(--muted);
+  }
+  #po details.po-view-section[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  /* Cross-vendor grand-total summary above the panel sub-panels. */
+  #po .panel-summary {
+    padding: 8px 14px; margin: 4px 0 12px;
+    background: var(--paper);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    box-shadow: var(--paper-shadow);
+    font-size: 13px; color: var(--text);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  }
+  #po .panel-summary .ps-label {
+    font-weight: 600; color: var(--muted); margin-right: 4px;
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  #po .panel-summary b { color: var(--accent); font-weight: 700; }
+  #po .panel-summary .ps-sep { color: var(--muted); margin: 0 4px; }
+
+  /* Phase-1 multi-vendor sub-panels. Each vendor is an outer <details>;
+     the existing inner section accordion nests inside. */
+  #po details.vendor-panel {
+    margin: 0 0 14px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--paper);
+    box-shadow: var(--paper-shadow);
+  }
+  /* Summary layout: 3-column grid whose columns 2 + 3 align with the body
+     table's Cases + Amount columns (table-layout:fixed, same widths, same
+     horizontal padding as the cells). Actions sit right after vendor-name
+     in the left column for shortest mouse travel from drawer to panel. */
+  #po details.vendor-panel > summary {
+    cursor: pointer; user-select: none; list-style: none;
+    display: grid;
+    /* 5 tracks match table: product | stock | case | amount | notes.
+       Last track 1fr absorbs remaining width same as table's auto col. */
+    grid-template-columns: 260px 85px 65px 95px 1fr;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 14px; font-weight: 600;
+    border-bottom: 1px solid transparent;
+  }
+  #po details.vendor-panel[open] > summary { border-bottom-color: var(--border); }
+  #po details.vendor-panel > summary::-webkit-details-marker { display: none; }
+  #po .vendor-head-left {
+    display: flex; align-items: center; gap: 6px;
+    min-width: 0;  /* allow name ellipsis to kick in instead of pushing actions off */
+  }
+  #po .vendor-head-left::before {
+    content: '\25B8'; display: inline-block;
+    transition: transform 0.15s; color: var(--muted);
+    flex: 0 0 auto;
+  }
+  #po details.vendor-panel[open] > summary .vendor-head-left::before {
+    transform: rotate(90deg);
+  }
+  #po .vendor-name {
+    min-width: 0; color: var(--text);
+    overflow: hidden; text-overflow: wrap; white-space: nowrap;
+  }
+  #po .vendor-total-cases,
+  #po .vendor-total-amount {
+    /* Explicit grid-column placement: totals sit above col 3 (CASES) and
+       col 4 (AMOUNT) in the 5-col layout (product|instock|cases|amount|notes).
+       Right-align and 12px padding match table cell padding for exact alignment. */
+    text-align: right;
+    padding-right: 12px;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px; font-weight: 500;
+  }
+  #po .vendor-total-cases { grid-column: 3; color: var(--muted); }
+  #po .vendor-total-amount { grid-column: 4; color: var(--accent); font-weight: 600; }
+  #po .vendor-actions { display: inline-flex; gap: 2px; margin-left: 4px; flex: 0 0 auto; }
+  /* Touch-friendly: min 36px tap target so iPhone thumbs hit reliably. */
+  #po .vendor-copy, #po .vendor-edit, #po .vendor-close {
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: 8px 10px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: color 0.12s, background 0.12s;
+    font-size: 18px; line-height: 1;
+    min-width: 36px; min-height: 36px;
+  }
+  #po .vendor-copy svg, #po .vendor-close svg, #po .vendor-edit svg {
+    width: 18px; height: 18px;
+    pointer-events: none;  /* click always lands on the button */
+  }
+  #po .vendor-copy:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  #po .vendor-edit:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  #po .vendor-close:hover { color: var(--danger); background: rgba(200,74,74,0.10); }
+  #po .vendor-copy.copied { color: var(--tone-final, #5a9a3a); }
+  #po .vendor-panel-body { padding: 4px 12px 10px; }  /* match summary padding-left/right so grid cols align with table cols */
+  /* Mobile: allow horizontal scroll instead of squashing columns */
+  @media (max-width: 600px) {
+    .po { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    #po table { font-size: 12px; min-width: 520px; }
+    #po th, #po td { padding: 6px 8px; }
+    /* Autocomplete on mobile: full-viewport width, pinned to top, name
+       on its own row, badges wrap to a second row. Visible scrollbar
+       (overflow-y: scroll forces it, -webkit-scrollbar styles it).
+       CSS kept conservative for iOS Safari <15.4 compatibility:
+       vh not dvh, width:100% not 100vw, z-index pushed very high to
+       escape any sticky-topbar stacking context, !important to override
+       the desktop rule's short-hand positioning. */
+    /* Mobile: JS anchors top/left/width via anchorPopupToChat().
+       Keep visual + scrollbar rules only here -- no positioning. */
+    .autocomplete {
+      overflow-y: scroll;
+      -webkit-overflow-scrolling: touch;
+      border: none;
+      border-radius: 0;
+      z-index: 9999;
+    }
+    .autocomplete::-webkit-scrollbar { width: 8px; }
+    .autocomplete::-webkit-scrollbar-track { background: transparent; }
+    .autocomplete::-webkit-scrollbar-thumb {
+      background: var(--border-strong); border-radius: 4px;
+    }
+    .autocomplete-item {
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 14px 16px;
+      gap: 6px 10px;
+    }
+    .autocomplete-item .ac-name {
+      flex: 1 1 100%;
+      white-space: normal; overflow: visible; text-overflow: clip;
+      word-break: break-word;
+      min-width: 0;
+    }
+    .autocomplete-item .ac-qty,
+    .autocomplete-item .ac-cov { flex: 0 0 auto; }
+  }
+  #po th { background: var(--panel2); font-weight: 600; color: var(--text);
+           font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+           border-bottom: 2px solid var(--border-strong); }
+  #po tr:hover td { background: rgba(204,120,92,0.06); }
+  #po h1 { font-size: 1.2em; margin: 0 0 0.2em 0; color: var(--text);
+           font-family: var(--font-serif); font-weight: 600; letter-spacing: -0.01em; }
+  #po h2 { font-size: 1em; margin: 0.3em 0 0.15em 0; color: var(--accent);
+           font-family: var(--font-ui); font-weight: 600; }
+  #po hr { border: none; border-top: 1px solid var(--border); margin: 0.6em 0; }
+  #po p, #po em { color: var(--muted); font-family: var(--font-serif); margin: 0.2em 0; }
+  #po blockquote { margin: 0.2em 0; padding: 0 0 0 10px; border-left: 2px solid var(--border);
+                   color: var(--muted); font-size: 12px; }
+  #po strong { color: var(--text); font-weight: 600; }
+  /* ✻ spinner — Claude propagating glyph, warm orange */
+  .spinner-dot {
+    display: inline-block;
+    color: var(--accent);
+    font-size: 1.1em;
+    margin-right: 6px;
+    animation: eip-pulse 1.2s ease-in-out infinite, eip-spin 2.4s linear infinite;
+    transform-origin: center;
+  }
+  .spinner-dot::before { content: '✻'; }
+  @keyframes eip-pulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+  @keyframes eip-spin  { to { transform: rotate(360deg); } }
+  /* Custom autocomplete dropdown — light theme */
+  .inputbar { position: relative; }
+  .autocomplete {
+    position: absolute;
+    /* Popup bottom edge = chat-wrap top edge (= chat top). Popup grows
+       UPWARD into the PO-panel region above; chat content is never
+       covered. */
+    bottom: 100%;
+    top: auto;
+    left: 0; right: 0;
+    box-sizing: border-box;       /* border counted IN width 100% */
+    max-width: 100%;
+    overflow-x: hidden;           /* no horizontal scroll */
+    max-height: 480px;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    display: none;
+    z-index: 100;
+    box-shadow: 0 -4px 16px rgba(43,42,38,0.10), 0 -2px 8px rgba(43,42,38,0.04);
+  }
+  .autocomplete-item { box-sizing: border-box; max-width: 100%; min-width: 0; }
+  .autocomplete.active { display: block; }
+  .autocomplete-item {
+    padding: 10px 14px;
+    cursor: pointer;
+    color: var(--text);
+    font: 14px/1.4 var(--font-ui);
+    border-bottom: 1px solid var(--border);
+    /* Badges now render before the name; pack items from the left so
+       stock / days-of-cover are always visible without horizontal scroll. */
+    display: flex; align-items: center; gap: 8px;
+  }
+  .autocomplete-item .ac-name {
+    flex: 1 1 0; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .autocomplete-item .ac-qty {
+    flex: 0 0 auto; font-size: 11px; padding: 2px 8px;
+    border-radius: 10px; background: var(--panel2); color: var(--muted);
+    font-weight: 600; white-space: nowrap;
+  }
+  .autocomplete-item .ac-qty.zero { background: #fff3cd; color: #856404; }
+  .autocomplete-item .ac-qty.neg  { background: #f8d7da; color: #721c24; }
+  .autocomplete-item .ac-cov {
+    flex: 0 0 auto; font-size: 11px; padding: 2px 8px;
+    border-radius: 10px; background: var(--panel2); color: var(--muted);
+    font-weight: 600; white-space: nowrap;
+  }
+  .autocomplete-item .ac-cov.warn   { background: #fff3cd; color: #856404; }
+  .autocomplete-item .ac-cov.urgent { background: #f8d7da; color: #721c24; }
+  .autocomplete-item:last-child { border-bottom: none; }
+  .autocomplete-item:hover,
+  .autocomplete-item.selected { background: rgba(204,120,92,0.18); color: var(--text); }
+  /* Keep badges + mark text readable on the translucent hover background */
+  .autocomplete-item mark { background: transparent; color: var(--accent); font-weight: 600; }
+  .autocomplete-item.selected mark { color: var(--accent); text-decoration: underline; }
+  /* Mode indicator below the input — tells user what Enter will do */
+  .mode-hint {
+    position: absolute;
+    bottom: 100%;
+    right: calc(var(--pad) + 90px);
+    padding: 3px 10px;
+    font: 500 11px/1.4 var(--font-ui);
+    color: var(--muted);
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    pointer-events: none;
+    user-select: none;
+  }
+  .mode-hint.go { color: var(--accent2); background: rgba(101,148,102,0.1); }
+  .mode-hint.edit { color: var(--accent); background: rgba(204,120,92,0.1); }
+  .mode-hint.warn { color: var(--danger); background: rgba(200,74,74,0.1); }
+  /* Collapsible backend-log panel. Floats above the inputbar so toggling
+     never reflows chat / PO panes. Closed = single 22px summary line.
+     Lifted 10px from inputbar so it does not visually fuse with the
+     send row; chat gets extra bottom padding so messages aren't hidden
+     behind the floating summary. */
+  .log-panel {
+    position: absolute;
+    /* 3px gap from inputbar (matches PO margin-bottom + chat padding) */
+    bottom: calc(100% + 3px);
+    /* full chat-box width (match .inputbar / .chat edges), not inset
+       inside inputbar padding */
+    left: 0;
+    right: 0;
+    z-index: 50;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    box-shadow: 0 -4px 12px rgba(43,42,38,0.06);
+    font-size: 11px;
+  }
+  .log-panel summary {
+    cursor: pointer;
+    padding: 4px 10px;
+    color: var(--muted);
+    user-select: none;
+    list-style: none;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .log-panel summary::-webkit-details-marker { display: none; }
+  .log-panel summary::before {
+    content: '\25B8';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 0.15s;
+  }
+  .log-panel[open] summary::before { transform: rotate(90deg); }
+  .log-body {
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 6px 10px 8px;
+    border-top: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+  }
+  .log-body .log-line {
+    padding: 2px 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: var(--muted);
+  }
+  .log-body .log-line + .log-line {
+    border-top: 1px dotted var(--border); margin-top: 2px; padding-top: 4px;
+  }
+
+  /* Time-appropriate greeting on landing */
+  .greeting {
+    padding: 14px var(--pad) 6px 58px;  /* left pad clears the 📋 drawer toggle (36px + 10 left + 12 gap) */
+    font-family: var(--font-serif);
+    font-size: 18px;
+    color: var(--text);
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.2px;
+  }
+  .greeting .emoji { margin-right: 6px; }
+  .greeting .sub { color: var(--muted); font-size: 13px; margin-left: 8px; font-family: var(--font-ui); }
+
+  /* Left drawer — order history accumulator.
+     drawer + toggle use position:fixed (viewport-relative).  Do NOT make
+     #app position:relative — that would trap them inside #app's stacking
+     context and bury them under siblings with background colors. */
+  .drawer-toggle {
+    position: fixed; top: 10px; left: 10px; z-index: 100;
+    width: 36px; height: 36px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    color: var(--text); cursor: pointer; font-size: 16px;
+    box-shadow: 0 2px 6px rgba(43,42,38,0.12);
+    /* iOS Safari centers emoji glyphs differently than Chrome -- force
+       flex centering so the icon always sits in the middle regardless of
+       the emoji's embedded baseline. */
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; line-height: 1;
+  }
+  .drawer-toggle:hover { background: var(--panel2); }
+  .drawer {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 280px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    z-index: 90;                 /* above greeting/topbar, below toggle(100) */
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .drawer.open { transform: translateX(0); box-shadow: 4px 0 16px rgba(43,42,38,0.1); }
+  .drawer-head {
+    /* left pad clears the fixed 📋 toggle button (10+36+12 = 58px) */
+    padding: 16px 16px 10px 58px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    min-height: 62px;   /* ≥ toggle's top:10 + 36 + breathing room */
+  }
+  .drawer-title {
+    font-weight: 600; font-size: 14px; color: var(--text);
+    letter-spacing: 0.3px;
+  }
+  .drawer-clear {
+    background: transparent; border: none; color: var(--muted);
+    font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  .drawer-clear:hover { color: var(--danger); background: rgba(200,74,74,0.08); }
+  .drawer-list {
+    flex: 1; overflow-y: auto; padding: 8px;
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  /* WebKit / Blink scrollbar -- artist cream + warm thumb */
+  .drawer-list::-webkit-scrollbar { width: 8px; }
+  .drawer-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .drawer-list::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 4px;
+    border: 2px solid var(--panel);  /* pad thumb visually so it reads thinner */
+    background-clip: padding-box;
+  }
+  .drawer-list::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+    background-clip: padding-box;
+  }
+  .drawer-foot {
+    padding: 8px 10px; border-top: 1px solid var(--border);
+    display: flex; justify-content: flex-start;
+  }
+  .drawer-empty {
+    color: var(--muted); font-size: 12px; font-style: italic;
+    text-align: center; padding: 20px 8px;
+  }
+  .drawer-item {
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    transition: background 0.12s, border-color 0.12s;
+    position: relative;
+  }
+  .drawer-item:hover { background: var(--panel2); border-color: var(--border-strong); }
+  .drawer-item.active { background: rgba(204,120,92,0.08); border-color: var(--accent); }
+  .drawer-item-vendor {
+    font-weight: 600; font-size: 13px; color: var(--text);
+    margin-bottom: 4px; padding-right: 32px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .drawer-item-stats {
+    font-size: 11px; color: var(--muted);
+    display: flex; gap: 8px;
+  }
+  .drawer-item-stats .amt { color: var(--accent); font-weight: 500; }
+  .drawer-item-time {
+    font-size: 10px; color: var(--muted); margin-top: 3px;
+  }
+  /* Stacked vertical icons at the right edge of the drawer item.
+     Order (top->bottom): move (>), copy, delete (hover-only). */
+  .drawer-item-del {
+    position: absolute; top: 54px; right: 6px;
+    background: rgba(59,109,176,0.10); border: 1px solid rgba(59,109,176,0.35);
+    color: #3b6db0;
+    font-size: 16px; line-height: 1; cursor: pointer;
+    padding: 3px 6px; border-radius: 4px;
+  }
+  .drawer-item-del:hover { background: rgba(59,109,176,0.22); border-color: #3b6db0; }
+  .drawer-item-del svg { width: 14px; height: 14px; display: block; stroke-width: 2; }
+  /* Copy button: sits to the left of the delete button. Always visible
+     on mobile (no hover), subtle on desktop until hover. */
+  .drawer-item-copy {
+    position: absolute; top: 30px; right: 6px;
+    background: transparent; border: none; color: var(--muted);
+    font-size: 15px; line-height: 1; cursor: pointer;
+    padding: 2px 5px; border-radius: 3px;
+    opacity: 0.5; transition: opacity 0.12s, color 0.12s;
+  }
+  .drawer-item:hover .drawer-item-copy { opacity: 1; }
+  .drawer-item-copy:hover { color: var(--accent); background: rgba(204,120,92,0.1); }
+  .drawer-item-copy.copied { color: var(--tone-final, #5a9a3a); opacity: 1; }
+  .drawer-item-copy svg { width: 14px; height: 14px; display: block; }
+  /* Move-to-panel arrow (right chevron) -- sits leftmost of the three. */
+  .drawer-item-move {
+    position: absolute; top: 6px; right: 6px;
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; padding: 2px 5px; border-radius: 3px;
+    opacity: 0.7; transition: opacity 0.12s, color 0.12s, background 0.12s;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .drawer-item:hover .drawer-item-move { opacity: 1; }
+  .drawer-item-move:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  .drawer-item-move svg { width: 15px; height: 15px; display: block; }
+
+  /* Inline PO editor -- replaces the markdown render while active. */
+  .po-editor { font-family: var(--font-ui); font-size: 14px; }
+  .po-editor .po-editor-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap;                 /* add-row-inline wraps to its own full-width row */
+    padding: 6px 0 10px 0; border-bottom: 1px solid var(--border);
+    margin-bottom: 10px;
+  }
+  .po-editor .po-add-btn {
+    background: var(--accent); color: #fff; border: none;
+    padding: 6px 14px; border-radius: var(--radius);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .po-editor .po-add-btn:hover { background: var(--accent-hover); }
+  /* Spacer pushes Save + Cancel to the right edge of the editor toolbar. */
+  .po-editor .po-editor-spacer { flex: 1 1 auto; }
+  .po-editor .po-total-hint { margin-left: auto; color: var(--muted); font-size: 12px; }
+  .po-editor .po-total-hint b { color: var(--text); font-weight: 600; }
+  .po-editor h3 {
+    font-size: 13px; margin: 14px 0 6px;
+    color: var(--accent); font-family: var(--font-ui); font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .po-editor details.po-section { margin: 10px 0 4px; }
+  .po-editor details.po-section > summary {
+    cursor: pointer; user-select: none;
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    padding: 6px 0;
+    list-style: none;
+  }
+  .po-editor details.po-section > summary::-webkit-details-marker { display: none; }
+  .po-editor details.po-section > summary::before {
+    content: '\25B8';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 0.15s;
+  }
+  .po-editor details.po-section[open] > summary::before { transform: rotate(90deg); }
+  .po-editor .po-section-count { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .po-editor .po-section-copy {
+    margin-left: 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    padding: 1px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    vertical-align: middle;
+  }
+  .po-editor .po-section-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .po-editor .po-section-copy.copied { color: var(--tone-final, #5a9a3a); border-color: currentColor; }
+  .po-editor .po-section-copy svg {
+    width: 13px; height: 13px; vertical-align: middle; margin-top: -1px;
+  }
+  /* Copy button attached to section banners in read-only markdown view. */
+  .po-view-copy {
+    margin-left: 8px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+    vertical-align: middle;
+  }
+  .po-view-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .po-view-copy.copied { color: var(--tone-final, #5a9a3a); border-color: currentColor; }
+  .po-view-copy svg { width: 13px; height: 13px; vertical-align: middle; }
+  .po-editor table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  .po-editor th {
+    text-align: left; padding: 4px 8px; color: var(--muted);
+    font-weight: 500; font-size: 11px; letter-spacing: 0.05em;
+    text-transform: uppercase; border-bottom: 1px solid var(--border);
+  }
+  .po-editor td {
+    padding: 2px 8px; border-bottom: 1px solid var(--border);
+    vertical-align: middle; line-height: 1.3;
+  }
+  .po-editor tbody tr { transition: background 0.1s ease; }
+  .po-editor tbody tr:hover { background: rgba(204,120,92,0.05); }
+  /* Editor: 5-col layout PRODUCT | STOCK | CASE | AMOUNT | NOTES.
+     Widths match view mode; only col-qty (CASE) is editable. */
+  .po-editor table { table-layout: fixed; }
+  .po-editor td.col-product, .po-editor table th:nth-child(1) {
+    width: 260px;
+    white-space: normal;
+    word-break: break-word;
+  }
+  .po-editor td.col-stock, .po-editor table th:nth-child(2) {
+    width: 85px; text-align: right; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .po-editor table td.col-qty,
+  .po-editor table th:nth-child(3) {
+    width: 90px; text-align: center; padding: 2px 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .po-editor table td.col-amt,
+  .po-editor table th:nth-child(4) {
+    width: 95px; text-align: right; padding-right: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .po-editor td.col-notes,
+  .po-editor table th:nth-child(5) {
+    font-size: 12px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Del button lives INSIDE the product cell (no dedicated column) so
+     it costs zero table layout width. Trash icon, muted by default,
+     subtle red tint on hover. */
+  /* Line-delete button inside editor row -- always visible (iPhone has no
+     hover). Blue tint + bordered box so it reads as a real tap target. */
+  .po-editor td.col-product .del-btn {
+    background: rgba(59,109,176,0.10); border: 1px solid rgba(59,109,176,0.35);
+    color: #3b6db0; cursor: pointer;
+    padding: 3px 6px;
+    margin: 0 8px 0 -2px;
+    border-radius: 4px;
+    vertical-align: middle;
+    font-size: 16px; line-height: 1;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .po-editor td.col-product .del-btn:hover {
+    background: rgba(59,109,176,0.22); border-color: #3b6db0;
+  }
+  .po-editor td.col-product .del-btn:active { transform: scale(0.92); }
+  .po-editor td.col-product .del-btn svg { width: 14px; height: 14px; display: block; stroke-width: 2; }
+  .po-editor td.col-product .prod-name {
+    vertical-align: middle;
+    font-weight: 450; color: var(--text);
+  }
+  .po-editor input.qty-input {
+    /* 72px wide + 12px right inner padding keeps 3-digit numbers (e.g. 999)
+       visible with breathing room from the right border. Centered text so
+       the number reads nicely even for 1-2 digit values. */
+    width: 60px; padding: 2px 12px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: var(--panel); color: var(--text);
+    text-align: center; font: inherit;
+    font-variant-numeric: tabular-nums;
+    display: inline-block; vertical-align: middle;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .po-editor input.qty-input:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(204,120,92,0.18);
+  }
+  .po-editor .del-btn {
+    background: transparent; border: none; color: var(--muted);
+    cursor: pointer; font-size: 16px; padding: 2px 6px;
+  }
+  .po-editor .del-btn:hover { color: var(--danger); }
+  .po-editor .add-row-inline {
+    position: relative; padding: 10px 8px; background: rgba(204,120,92,0.04);
+    border: 1px dashed var(--accent); border-radius: var(--radius);
+    margin: 8px 0;
+    flex: 1 1 100%;                  /* break to its own line, fill width */
+  }
+  .po-editor .add-row-inline input {
+    width: 100%; padding: 6px 10px; border: 1px solid var(--border-strong);
+    border-radius: 4px; background: var(--panel); color: var(--text);
+    font: inherit;
+  }
+  .po-editor .add-row-inline .autocomplete {
+    bottom: auto; top: 100%;
+  }
+  .po-editor .add-row-actions {
+    display: flex; gap: 8px; margin-top: 8px;
+  }
+  /* 5-col grid keeps stock / cost / price vertically aligned across rows. */
+  .po-editor .autocomplete-item.ac-picker {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) 60px 68px 68px;
+    align-items: center;
+    gap: 10px; cursor: pointer;
+    padding: 6px 10px;
+  }
+  .po-editor .autocomplete-item .ac-check {
+    width: 16px; height: 16px; cursor: pointer; margin: 0;
+    accent-color: var(--accent);
+  }
+  .po-editor .autocomplete-item .ac-name {
+    /* Hold up to ~60 chars with wrap. On iPhone the name column is narrow,
+       wrapping to 2-4 lines keeps stock/cost/price visible in their own
+       grid cells on the right (they stay vertically centered). */
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.35;
+  }
+  .po-editor .autocomplete-item .ac-stock,
+  .po-editor .autocomplete-item .ac-cost,
+  .po-editor .autocomplete-item .ac-price {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  .po-editor .autocomplete-item .ac-stock { color: var(--muted); font-size: 12px; }
+  .po-editor .autocomplete-item .ac-cost  { color: var(--muted); font-weight: 500; }
+  .po-editor .autocomplete-item .ac-price { color: var(--accent); font-weight: 600; }
+
+  /* Back-to-live banner when viewing a historical PO */
+  .history-banner {
+    background: rgba(204,120,92,0.1);
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px; margin: -10px -6px 10px -6px;
+    font-size: 12px; color: var(--text);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .history-banner button {
+    background: var(--accent); color: #fff; border: none;
+    padding: 4px 10px; border-radius: 4px; font-size: 11px;
+    font-weight: 600; cursor: pointer;
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<!-- Login overlay. Hidden by default; flipped visible at startup if
+     /api/auth/me returns 401. Main app stays behind and gets shown only
+     after successful login. -->
+<div id="loginOverlay" class="login-overlay" style="display:none">
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <h2 class="login-title">Sign in</h2>
+    <div class="login-field">
+      <label for="loginUser">Username</label>
+      <input id="loginUser" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" required>
+    </div>
+    <div class="login-field">
+      <label for="loginPass">Password</label>
+      <input id="loginPass" type="password" autocomplete="current-password" required>
+    </div>
+    <label class="login-remember">
+      <input id="loginRemember" type="checkbox" checked>
+      <span>Remember me on this device</span>
+    </label>
+    <div id="loginError" class="login-error" style="display:none"></div>
+    <button type="submit" class="login-submit">Sign in</button>
+  </form>
+</div>
+<div id="app">
+  <button id="drawerToggle" class="drawer-toggle" title="展开历史订单">📋</button>
+  <aside id="drawer" class="drawer">
+    <div class="drawer-head">
+      <span class="drawer-title" data-i18n="drawer.title">已生成订单</span>
+    </div>
+    <div id="drawerList" class="drawer-list"></div>
+    <div class="drawer-foot">
+      <button id="drawerClear" class="drawer-clear" data-i18n="btn.clear">✕ 清空</button>
+    </div>
+  </aside>
+  <div id="greeting" class="greeting"></div>
+  <div class="topbar">
+    <select id="storeSel" aria-label="Store" data-i18n-aria-label="store.label">
+      <option value="" data-i18n="store.placeholder">加载门店…</option>
+    </select>
+    <select id="vendorSel" aria-label="Vendor" data-i18n-aria-label="vendor.label" disabled>
+      <option value="" data-i18n="vendor.placeholder">先选门店</option>
+    </select>
+    <select id="langSel" class="lang-select" aria-label="Language">
+      <option value="zh">中文</option>
+      <option value="en">English</option>
+    </select>
+    <span id="apiStatus" class="api-status checking"
+          title="Checking server..."></span>
+  </div>
+
+  <div class="po" id="po">
+    <div class="po-toolbar">
+      <span class="po-title" data-i18n="label.current_po">当前采购建议</span>
+      <span id="holidayBanner" class="holiday-banner" style="display:none"></span>
+      <span class="po-meta">
+        <span id="cacheAge"></span>
+        <span id="timer"></span>
+      </span>
+      <span class="po-actions">
+        <button id="refreshCacheBtn" class="btn btn-ghost">
+          <span class="btn-icon">🔄</span> <span data-i18n="btn.refresh">刷新</span>
+        </button>
+        <button id="cancelBtn" class="btn btn-cancel" style="display:none" data-i18n="btn.cancel">✕ 取消</button>
+        <button id="editPoBtn" class="btn btn-secondary" style="display:none">
+          <span class="btn-icon">✎</span> <span data-i18n="btn.edit">编辑</span>
+        </button>
+        <button id="savePoBtn" class="btn btn-secondary" style="display:none">
+          <span class="btn-icon">💾</span> <span data-i18n="btn.save">保存</span>
+        </button>
+        <button id="emailBtn" class="btn btn-secondary" disabled>
+          <span class="btn-icon">✉</span> <span data-i18n="btn.email">发送邮件</span>
+        </button>
+      </span>
+    </div>
+    <div class="placeholder" id="poBody" data-i18n="placeholder.po_init">选择门店和供应商,将自动生成建议…</div>
+  </div>
+
+  <div class="chat-wrap">
+    <div id="autocomplete" class="autocomplete"></div>
+    <div class="chat" id="chat"></div>
+  </div>
+
+  <div class="inputbar">
+    <details id="logPanel" class="log-panel">
+      <summary data-i18n="log.show">show log</summary>
+      <div id="logBody" class="log-body"></div>
+    </details>
+    <div id="modeHint" class="mode-hint"></div>
+    <input id="msgInput" type="text" autocomplete="off"
+           data-i18n-placeholder="placeholder.msg"
+           placeholder="例:把 Tito 砍一半 / 加 2 箱 Jameson / 选产品 回车生成"
+           enterkeyhint="send">
+    <button id="sendBtn" disabled data-i18n="btn.send">发送</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+
+  // ── i18n scaffold ────────────────────────────────────────────────
+  const I18N = {
+    zh: {
+      'store.label': '门店', 'vendor.label': '供应商',
+      'store.placeholder': '加载门店…', 'vendor.placeholder': '先选门店',
+      'store.select': '选择门店…', 'vendor.select': '选择供应商…',
+      'label.current_po': '当前采购建议',
+      'btn.refresh': '刷新', 'btn.email': '发送邮件',
+      'btn.edit': '编辑', 'btn.save': '保存',
+      'btn.cancel': '✕ 取消', 'btn.add_product': '+ 添加产品',
+      'btn.clear': '✕ 清空', 'btn.send': '发送',
+      'drawer.title': '已生成订单', 'drawer.empty': '暂无已生成订单',
+      'log.show': 'show log',
+      'unit.cases': '箱', 'col.product': '产品', 'col.cases': '箱',
+      'col.stock': '库存', 'col.amount': '金额', 'col.notes': '备注',
+      'section.empty': '(空)',
+      'placeholder.po_init': '选择门店和供应商,将自动生成建议…',
+      'placeholder.msg': '例:把 Tito 砍一半 / 加 2 箱 Jameson / 选产品 回车生成',
+      'tooltip.copy': '复制订单给业务员',
+      'tooltip.edit': '编辑', 'tooltip.delete': '删除',
+      'tooltip.back_to_drawer': '移到订单 bucket',
+      'tooltip.to_panel': '移到订单面板',
+      'msg.saved': '已保存',
+      'section.urgent': '急需',
+      'section.volatile': '波动',
+      'section.standard': '常规补货',
+      'section.discontinuing': '建议退役',
+      'section.negative': '负库存',
+      'holiday.today': '今天',
+      'holiday.days_away': '{N} 天后',
+      'holiday.demand': '需求 {X}x',
+    },
+    en: {
+      'store.label': 'Store', 'vendor.label': 'Vendor',
+      'store.placeholder': 'Loading stores...', 'vendor.placeholder': 'Select a store first',
+      'store.select': 'Select store...', 'vendor.select': 'Select vendor...',
+      'label.current_po': 'Current Order',
+      'btn.refresh': 'Refresh', 'btn.email': 'Send Email',
+      'btn.edit': 'Edit', 'btn.save': 'Save',
+      'btn.cancel': 'x Cancel', 'btn.add_product': '+ Add Product',
+      'btn.clear': 'x Clear', 'btn.send': 'Send',
+      'drawer.title': 'Generated Orders', 'drawer.empty': 'No generated orders yet',
+      'log.show': 'show log',
+      'unit.cases': 'cs', 'col.product': 'Product', 'col.cases': 'Case',
+      'col.stock': 'Stock', 'col.amount': 'Amount', 'col.notes': 'Notes',
+      'section.empty': '(empty)',
+      'placeholder.po_init': 'Select store and vendor; a suggestion will be generated...',
+      'placeholder.msg': 'e.g. cut Tito in half / add 2 cases of Jameson / pick product and press Enter',
+      'tooltip.copy': 'Copy order for salesman',
+      'tooltip.edit': 'Edit', 'tooltip.delete': 'Delete',
+      'tooltip.back_to_drawer': 'Move to order bucket',
+      'tooltip.to_panel': 'Move to order panel',
+      'msg.saved': 'Saved',
+      'section.urgent': 'Urgent',
+      'section.volatile': 'Volatile',
+      'section.standard': 'Standard reorder',
+      'section.discontinuing': 'Discontinuing',
+      'section.negative': 'Negative stock',
+      'holiday.today': 'today',
+      'holiday.days_away': 'in {N} days',
+      'holiday.demand': '{X}x demand',
+    },
+  };
+  let currentLang = localStorage.getItem('eip_lang') || 'zh';
+  function t(key) {
+    return (I18N[currentLang] && I18N[currentLang][key])
+        || I18N.zh[key] || key;
+  }
+  // LLM-emitted section banners are literal text (not dict keys). Map
+  // either language literal to a dict key for display-time translation.
+  const SECTION_ALIASES = {
+    '建议退役': 'section.discontinuing', 'discontinuing': 'section.discontinuing',
+    '急需': 'section.urgent', 'urgent': 'section.urgent',
+    '波动': 'section.volatile', 'volatile': 'section.volatile',
+    '常规补货': 'section.standard', 'standard reorder': 'section.standard',
+    'standard': 'section.standard',
+    '负库存': 'section.negative', 'negative stock': 'section.negative',
+    'negative': 'section.negative',
+  };
+  function translateSectionTitle(raw) {
+    if (!raw) return raw;
+    const key = SECTION_ALIASES[raw.trim().toLowerCase()]
+             || SECTION_ALIASES[raw.trim()];
+    return key ? t(key) : raw;
+  }
+  // Rewrite any top-level bold banner (<p><strong> or <summary><strong>)
+  // whose text maps to a known section alias. Catches sections that the
+  // parser skipped (e.g. "negative stock") but which marked.js still
+  // rendered as a banner in the DOM.
+  function translateAllBanners(root) {
+    if (!root) return;
+    root.querySelectorAll('p > strong:first-child, summary > strong:first-child').forEach(s => {
+      const translated = translateSectionTitle(s.textContent);
+      if (translated !== s.textContent) s.textContent = translated;
+    });
+  }
+  function applyI18n(root) {
+    root = root || document;
+    root.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = t(el.dataset.i18n);
+    });
+    root.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+      el.placeholder = t(el.dataset.i18nPlaceholder);
+    });
+    root.querySelectorAll('[data-i18n-title]').forEach(el => {
+      el.title = t(el.dataset.i18nTitle);
+    });
+    root.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+      el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel));
+    });
+  }
+  function setLang(lang) {
+    currentLang = lang;
+    localStorage.setItem('eip_lang', lang);
+    document.documentElement.lang = lang;
+    applyI18n();
+    // Re-run dynamic renderers so innerHTML-built labels pick up new lang.
+    // Log any render errors -- silent catch hides bugs (e.g. user thinks
+    // data is lost when it's actually a render throw in en path).
+    try { if (typeof renderHistory === 'function') renderHistory(); }
+    catch (e) { console.error('setLang renderHistory failed:', e); }
+    try { if (typeof renderPOPanel === 'function') renderPOPanel(); }
+    catch (e) { console.error('setLang renderPOPanel failed:', e); }
+    try {
+      if (typeof _editingPO !== 'undefined' && _editingPO
+          && typeof renderPOEditor === 'function') renderPOEditor(_editingPO.parsed);
+    } catch (e) { console.error('setLang renderPOEditor failed:', e); }
+    try { if (typeof renderHolidayBanner === 'function') renderHolidayBanner(); }
+    catch (e) { console.error('setLang renderHolidayBanner failed:', e); }
+    // Broadcast so ad-hoc renderers (greeting, cache status) can re-run.
+    window.dispatchEvent(new CustomEvent('lang-changed'));
+  }
+  // Wire dropdown (langSel exists in topbar HTML).
+  const langSel = $('langSel');
+  if (langSel) {
+    langSel.value = currentLang;
+    langSel.addEventListener('change', e => setLang(e.target.value));
+  }
+  document.documentElement.lang = currentLang;
+  // Defer first applyI18n until the rest of startup has run and all
+  // data-i18n annotated elements exist -- called after loadHistory / etc.
+
+  const storeSel = $('storeSel');
+  const vendorSel = $('vendorSel');
+  const poBody = $('poBody');
+  const chat = $('chat');
+  const msgInput = $('msgInput');
+  const sendBtn = $('sendBtn');
+  const cancelBtn = $('cancelBtn');
+
+  let sessionId = null;
+  let poBuffer = '';
+  let generating = false;
+
+  const logBody = document.getElementById('logBody');
+  const addMsg = (text, cls) => {
+    // Sys messages (progress / errors / cancellation notices / chain
+    // events) route to the collapsible log panel so the chat surface
+    // stays clean. Other classes (user/ai/etc) still land in chat.
+    if (cls === 'sys') {
+      const d = document.createElement('div');
+      d.className = 'log-line';
+      d.textContent = text;
+      logBody.appendChild(d);
+      logBody.scrollTop = logBody.scrollHeight;
+      return d;
+    }
+    const d = document.createElement('div');
+    d.className = 'msg ' + cls;
+    d.textContent = text;
+    chat.appendChild(d);
+    chat.scrollTop = chat.scrollHeight;
+    return d;
+  };
+
+  // ─────────────────── Custom autocomplete ──────────────────────────
+  const acEl = document.getElementById('autocomplete');
+  const modeHintEl = document.getElementById('modeHint');
+  let _products = [];           // array of {name, vendor_id}
+  let _acSelected = -1;         // highlighted item index
+  let _goPending = null;        // {name, vendor_id} — set when user selects from AC
+                                // Next Enter triggers "generate" path, not "edit"
+
+  const updateProductSuggestions = (md) => {
+    if (!md) return;
+    const names = new Set();
+    md.split('\n').forEach(line => {
+      const m = line.match(/^\|\s*([^|]+?)\s*\|/);
+      if (m) names.add(m[1].trim());
+    });
+    _products = [...names].filter(n => {
+      if (!n || n.length < 3) return false;
+      if (/^-+$/.test(n)) return false;
+      const lower = n.toLowerCase();
+      return !['product', 'name', 'cases', 'qty'].includes(lower);
+    }).sort((a, b) => a.localeCompare(b));
+    console.log('[autocomplete] products loaded:', _products.length,
+                _products.slice(0, 3));
+  };
+
+  // Cross-browser copy. Two paths:
+  //   1. navigator.clipboard.writeText -- modern, requires HTTPS / secure
+  //      context. Chrome desktop on localhost works; iOS Safari over plain
+  //      HTTP rejects silently.
+  //   2. execCommand fallback -- iOS Safari requires the textarea to be
+  //      INSIDE the viewport (off-screen left:-9999px is rejected),
+  //      contentEditable=true, and selection set via Range (not .select).
+  async function copyToClipboard(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_e) { /* fall through to fallback */ }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.readOnly = false;
+    ta.contentEditable = 'true';
+    // 1x1 inside viewport (iOS rejects off-screen). Opacity 0 hides it.
+    // font-size:16px keeps iOS from auto-zooming.
+    ta.style.cssText =
+      'position:fixed;top:0;left:0;width:1px;height:1px;' +
+      'opacity:0;border:0;padding:0;margin:0;font-size:16px;';
+    document.body.appendChild(ta);
+    const prevSel = document.getSelection();
+    const prevRange = prevSel && prevSel.rangeCount > 0 ? prevSel.getRangeAt(0) : null;
+    // iOS-safe selection: Range over content + textarea selectionRange.
+    const range = document.createRange();
+    range.selectNodeContents(ta);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    try { ta.setSelectionRange(0, text.length); } catch (_e) {}
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_e) {}
+    document.body.removeChild(ta);
+    if (prevRange && prevSel) { prevSel.removeAllRanges(); prevSel.addRange(prevRange); }
+    return ok;
+  }
+
+  // Copy / Check icon SVGs (Feather-ish, claude.ai-style clipboard).
+  // SVG icons (Feather-style), commercial-grade. currentColor so they
+  // inherit the button's text color and respond to hover / disabled.
+  // Edit these SVG paths here to restyle everywhere.
+  const ICON_COPY = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+  const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  const ICON_TRASH = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"></path></svg>';
+  const ICON_ARROW_LEFT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>';
+  const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+  const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const highlightMatch = (name, query) => {
+    if (!query) return escapeHtml(name);
+    const idx = name.toLowerCase().indexOf(query.toLowerCase());
+    if (idx < 0) return escapeHtml(name);
+    return escapeHtml(name.slice(0, idx))
+      + '<mark>' + escapeHtml(name.slice(idx, idx + query.length)) + '</mark>'
+      + escapeHtml(name.slice(idx + query.length));
+  };
+
+  const findWordToComplete = (text, caret) => {
+    // Return the "current word" being typed at the caret — the last run of
+    // non-space chars.  Edit commands like "减 1 箱 tito" should match "tito".
+    const before = text.slice(0, caret);
+    const m = before.match(/[^\s,;。,;]*$/);
+    return { word: (m ? m[0] : ''), start: caret - (m ? m[0].length : 0) };
+  };
+
+  // Multi-strategy product matcher:
+  //   1. Current word at caret (legacy)
+  //   2. If input has multiple meaningful tokens, match products whose name
+  //      contains ALL of them (e.g. "mark west 1.5" → "Mark West Pinot Noir 1.5L")
+  const refreshAutocomplete = () => {
+    const raw = msgInput.value;
+    // iOS Safari sometimes returns selectionStart=0 right after input
+    // event fires (caret position not yet committed). When that happens
+    // and raw is non-empty, pretend caret is at end of input so we can
+    // still pick up the typed word. This avoids autocomplete showing
+    // nothing on iPhone.
+    let caret = msgInput.selectionStart;
+    if (!caret && raw) caret = raw.length;
+    if (!caret) caret = 0;
+    const { word } = findWordToComplete(raw, caret);
+    let matches = [];
+    let highlightKey = '';
+    console.log('[ac] raw=%o word=%o caret=%d _products.len=%d sample=%o',
+      raw, word, caret, _products.length, _products[0]);
+
+    if (_products.length > 0) {
+      // Strategy 1: current word (short typing)
+      let q1 = word;
+      if (q1.length < 2) {
+        // Caret sits after a space/comma -- current "word" is empty.
+        // Fall back to the last non-empty token before the caret so
+        // "josh " / "josh " still match "josh".
+        const prior = raw.slice(0, caret).split(/[\s,;。,;]+/).filter(Boolean);
+        if (prior.length > 0) q1 = prior[prior.length - 1];
+      }
+      if (q1.length >= 2) {
+        const q = q1.toLowerCase();
+        matches = _products.filter(p => p.name.toLowerCase().includes(q));
+        highlightKey = q1;
+      }
+
+      // Strategy 2: full-input token AND match (fallback when strategy 1 empty)
+      if (matches.length === 0) {
+        const tokens = raw.toLowerCase()
+          .replace(/[^a-z0-9\u4e00-\u9fff\s.]/g, ' ')   // keep letters/digits/CJK/dots
+          .split(/\s+/)
+          .filter(t => t.length >= 2);
+        // Drop common non-product Chinese words
+        const STOP = new Set(['查','查询','数量','多少','库存','价格','多少钱','有吗','还有']);
+        const productTokens = tokens.filter(t => !STOP.has(t));
+        if (productTokens.length >= 2) {
+          matches = _products.filter(p => {
+            const name = p.name.toLowerCase();
+            return productTokens.every(t => name.includes(t));
+          });
+          // Use the longest matching token for highlighting
+          highlightKey = productTokens.sort((a,b) => b.length - a.length)[0];
+        }
+      }
+    }
+
+    matches = matches.slice(0, 12);
+    if (matches.length === 0) {
+      acEl.classList.remove('active');
+      updateModeHint();
+      return;
+    }
+    _acSelected = 0;
+    acEl.innerHTML = matches
+      .map((p, i) => {
+        const q = (p.qty_on_hand ?? null);
+        const dc = (p.days_of_cover ?? null);
+        const qtyTxt = q === null ? '' :
+          `<span class="ac-qty${q < 0 ? ' neg' : (q === 0 ? ' zero' : '')}">库存 ${q}</span>`;
+        const dcTxt = dc === null ? '' :
+          `<span class="ac-cov${dc <= 7 ? ' urgent' : (dc <= 21 ? ' warn' : '')}">撑 ${dc} 天</span>`;
+        // Layout: [product name] [qty badge] [cov badge]
+        return `<div class="autocomplete-item${i===0?' selected':''}" data-idx="${i}">` +
+               `<span class="ac-name">${highlightMatch(p.name, highlightKey)}</span>${qtyTxt}${dcTxt}` +
+               `</div>`;
+      })
+      .join('');
+    acEl.classList.add('active');
+    acEl._matches = matches;
+  };
+
+  const applySelection = (product) => {
+    // product = {name, vendor_id}
+    const caret = msgInput.selectionStart || 0;
+    const { word, start } = findWordToComplete(msgInput.value, caret);
+    const before = msgInput.value.slice(0, start);
+    const after = msgInput.value.slice(caret);
+    msgInput.value = before + product.name + after;
+    const newCaret = (before + product.name).length;
+    msgInput.setSelectionRange(newCaret, newCaret);
+    acEl.classList.remove('active');
+    // Mark: next Enter triggers GO (generate), not edit.
+    _goPending = product;
+    updateModeHint();
+    msgInput.focus();
+  };
+
+  const updateModeHint = () => {
+    const hasStore = !!storeSel.value;
+    const v = msgInput.value.trim();
+    const canGo = _goPending && v === _goPending.name && hasStore;
+    const canEdit = !!sessionId && !!v;
+    const canQuery = hasStore && !!v && !sessionId;  // ad-hoc product lookup
+    sendBtn.disabled = generating || !(canGo || canEdit || canQuery);
+
+    if (!hasStore) {
+      modeHintEl.textContent = '⚠ 请先选门店';
+      modeHintEl.className = 'mode-hint warn';
+      modeHintEl.title = '必须先在顶部下拉框选一个门店才能发送消息';
+    } else if (canGo) {
+      modeHintEl.textContent = '▶ Enter 生成 PO';
+      modeHintEl.className = 'mode-hint go';
+      modeHintEl.title = 'Analysis (完整分析):\n'
+        + '从 autocomplete 选中产品名后按 Enter,AI 会针对该产品对应的供应商,'
+        + '结合库存 / 销量 / 历史 PO / 节日等生成完整采购建议 (分类: 急需 / 波动 / 常规 / 退役).';
+    } else if (canEdit) {
+      modeHintEl.textContent = '💬 Enter 编辑 PO';
+      modeHintEl.className = 'mode-hint edit';
+      modeHintEl.title = 'Chat (对话调整):\n'
+        + '对已生成的采购建议做修改. 例: "把 Tito 减半" / "加 5 箱 Jameson" / '
+        + '"移除 Fireball" / "整体上调 10%". AI 保留上下文, 只发增量指令即可.';
+    } else if (canQuery) {
+      modeHintEl.textContent = '🔍 Enter 查询库存';
+      modeHintEl.className = 'mode-hint go';
+      modeHintEl.title = 'QuickChat (快速查询):\n'
+        + '无需生成 PO, 直接输入产品名 + Enter. 立即返回当前库存 / 30 天销量 / '
+        + '上次 PO 箱数 / 撑天数. 适合电话接单时核查.';
+    } else {
+      modeHintEl.textContent = '';
+      modeHintEl.className = 'mode-hint';
+      modeHintEl.title = '';
+    }
+  };
+
+  // ── Go path: reverse-lookup vendor, set dropdowns, trigger generate ───
+  async function triggerGoFromProduct(product) {
+    if (!storeSel.value) {
+      addMsg('⚠ 请先选门店', 'sys');
+      return;
+    }
+    if (!product.vendor_id) {
+      addMsg(`⚠ 产品「${product.name}」未绑定供应商`, 'sys');
+      return;
+    }
+    // Ensure the vendor dropdown has the option (it should, since catalog
+    // was filtered to active vendors).  If not, we bail.
+    const vendorOpt = Array.from(vendorSel.options)
+      .find(o => o.value === product.vendor_id);
+    if (!vendorOpt) {
+      addMsg(`⚠ 供应商 ${product.vendor_id} 不在可选列表`, 'sys');
+      return;
+    }
+    vendorSel.value = product.vendor_id;
+    msgInput.value = '';
+    _goPending = null;
+    updateModeHint();
+    addMsg(`▶ 按产品「${product.name}」→ 供应商「${vendorOpt.text}」生成 PO`, 'sys');
+    await generatePO();
+  }
+
+  // SQL / destructive patterns — reject on the client too for fast feedback.
+  const SQL_BAD_RE = /\b(drop|truncate|delete|insert|update|alter|create|grant|revoke|exec|execute|xp_cmdshell|union\s+(?:all\s+)?select)\b|--|\/\*|\*\/|(['"]\s*(?:or|and)\s+['"\d])|;\s*(?:drop|truncate|delete|insert|update|alter|exec)/i;
+
+  msgInput.addEventListener('input', () => {
+    if (msgInput.value.length > 300) {
+      msgInput.value = msgInput.value.slice(0, 300);
+      addMsg('⚠ 最多 300 字', 'sys');
+    }
+    if (SQL_BAD_RE.test(msgInput.value)) {
+      addMsg('⚠ 检测到危险 SQL 关键字,已清空', 'sys');
+      msgInput.value = '';
+    }
+    if (_goPending && msgInput.value.trim() !== _goPending.name) {
+      _goPending = null;
+    }
+    refreshAutocomplete();
+    updateModeHint();
+  });
+  msgInput.addEventListener('focus', refreshAutocomplete);
+  msgInput.addEventListener('blur', () => {
+    // Delay so click on item fires first
+    setTimeout(() => acEl.classList.remove('active'), 200);
+  });
+  // IMPORTANT: this listener must fire BEFORE the sendEdit Enter handler
+  // registered later.  addEventListener order is insertion order, so we
+  // use capture:true to guarantee we see the event first and can stop it
+  // when the dropdown is active.
+  msgInput.addEventListener('keydown', (e) => {
+    if (!acEl.classList.contains('active')) return;
+    const items = acEl.querySelectorAll('.autocomplete-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      _acSelected = Math.min(_acSelected + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle('selected', i === _acSelected));
+      items[_acSelected]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      _acSelected = Math.max(_acSelected - 1, 0);
+      items.forEach((el, i) => el.classList.toggle('selected', i === _acSelected));
+      items[_acSelected]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (_acSelected >= 0 && acEl._matches) {
+        e.preventDefault(); e.stopImmediatePropagation();
+        applySelection(acEl._matches[_acSelected]);
+      }
+    } else if (e.key === 'Escape') {
+      e.stopImmediatePropagation();
+      acEl.classList.remove('active');
+    }
+  }, { capture: true });
+  acEl.addEventListener('mousedown', (e) => {
+    // mousedown fires before blur, so we can select without losing focus
+    const item = e.target.closest('.autocomplete-item');
+    if (!item || !acEl._matches) {
+      // Tap on popup background (non-item area) closes the popup.
+      // preventDefault so input keeps focus and caret position.
+      e.preventDefault();
+      acEl.classList.remove('active');
+      return;
+    }
+    e.preventDefault();
+    const idx = parseInt(item.dataset.idx, 10);
+    applySelection(acEl._matches[idx]);
+  });
+  // Tap outside popup (and outside the input) closes it immediately.
+  // pointerdown covers both mouse and touch without the 200ms blur delay.
+  document.addEventListener('pointerdown', (e) => {
+    if (!acEl.classList.contains('active')) return;
+    if (e.target === msgInput || acEl.contains(e.target)) return;
+    acEl.classList.remove('active');
+  });
+
+  const setPO = (text, streaming) => {
+    // While the user is editing the PO, don't clobber the editor DOM
+    // (streaming generation / refresh cache must not steal focus).
+    if (typeof _editingPO !== 'undefined' && _editingPO) return;
+    poBody.className = streaming ? 'streaming' : '';
+    if (!text) {
+      poBody.textContent = '(无内容)';
+    } else if (window.marked && /[#|]/.test(text)) {
+      poBody.innerHTML = window.marked.parse(text);
+      flagRetireeRows(poBody);
+      if (!streaming) {
+        wrapSectionsIntoAccordion(text);
+        attachSectionCopyButtons(text);
+      }
+    } else {
+      poBody.textContent = text;
+    }
+    poBody.scrollTop = poBody.scrollHeight;
+  };
+
+  function wrapSectionsIntoAccordion(md, root, skipTitle, keyPrefix) {
+    // Post-process the marked-rendered DOM in `root` (default poBody) so
+    // each section (banner <p> + content until next banner) becomes a
+    // collapsible <details>. Scoped so it can run inside a single vendor
+    // sub-panel without touching other sub-panels.
+    // keyPrefix lets each inner <details> tag itself with a stable
+    // data-state-key so the outer render can snapshot/restore open
+    // state across full-panel re-renders.
+    root = root || poBody;
+    const parsed = parsePOMarkdown(md || '');
+    if (parsed.sections.length === 0) return;
+    const titles = new Set(parsed.sections.map(s => s.title));
+    const boundaries = [];
+    for (const el of Array.from(root.children)) {
+      const strong = el.querySelector ? el.querySelector('strong') : null;
+      if (!strong) continue;
+      const txt = strong.textContent.trim();
+      if (titles.has(txt)) boundaries.push({ el, title: txt });
+    }
+    // Walk reversed so DOM indices stay stable while we mutate.
+    for (let i = boundaries.length - 1; i >= 0; i--) {
+      const { el: bannerP, title } = boundaries[i];
+      if (bannerP.dataset.accordionWrapped) continue;
+      if (skipTitle && title === skipTitle) {
+        // Banner duplicates the outer vendor-panel title -- remove.
+        bannerP.remove();
+        continue;
+      }
+      const isRetire = /建议退役|retire|discontinu/i.test(title);
+      const nextBanner = boundaries[i + 1]?.el || null;
+      const between = [];
+      let cursor = bannerP.nextSibling;
+      while (cursor && cursor !== nextBanner) {
+        const next = cursor.nextSibling;
+        between.push(cursor);
+        cursor = next;
+      }
+      const details = document.createElement('details');
+      details.className = 'po-view-section';
+      if (keyPrefix) details.dataset.stateKey = keyPrefix + ':' + title;
+      if (!isRetire) details.setAttribute('open', '');
+      // Translate the banner's <strong> text in place before we move it
+      // into the summary. Non-mapped titles (vendor / product names)
+      // stay as-is.
+      const strongEl = bannerP.querySelector('strong');
+      if (strongEl) {
+        const translated = translateSectionTitle(strongEl.textContent);
+        if (translated !== strongEl.textContent) strongEl.textContent = translated;
+      }
+      const summary = document.createElement('summary');
+      summary.className = 'po-view-section-title';
+      while (bannerP.firstChild) summary.appendChild(bannerP.firstChild);
+      details.appendChild(summary);
+      for (const node of between) details.appendChild(node);
+      bannerP.parentNode.replaceChild(details, bannerP);
+      // Mark so attachSectionCopyButtons won't re-wrap if called later.
+      summary.dataset.accordionWrapped = '1';
+    }
+  }
+
+  function attachSectionCopyButtons(md, root) {
+    root = root || poBody;
+    const parsed = parsePOMarkdown(md || '');
+    if (parsed.sections.length === 0) return;
+    const strongs = root.querySelectorAll('strong');
+    parsed.sections.forEach((s, si) => {
+      for (const strong of strongs) {
+        if (strong.dataset.copyAttached) continue;
+        if (strong.textContent.trim() === s.title) {
+          strong.dataset.copyAttached = '1';
+          const btn = document.createElement('button');
+          btn.className = 'po-view-copy';
+          btn.dataset.si = String(si);
+          btn.title = '复制本组订单给业务员';
+          btn.setAttribute('aria-label', '复制');
+          btn.innerHTML = ICON_COPY;
+          strong.parentElement.insertBefore(btn, strong.nextSibling);
+          break;
+        }
+      }
+    });
+  }
+
+  // Highlight likely-retiree rows: 库存 0 + 历史 0 箱 (no recent sales OR purchases).
+  function flagRetireeRows(root) {
+    root.querySelectorAll('tr').forEach(tr => {
+      const txt = tr.textContent || '';
+      if (/6\s*月未采购/.test(txt) && !tr.classList.contains('no-purchase')) {
+        tr.classList.add('no-purchase');
+        const last = tr.lastElementChild;
+        if (last) last.insertAdjacentHTML('beforeend', ' <span class="no-purchase-tag">6月未采购</span>');
+        return;
+      }
+      if (/库存\s*0\b/.test(txt) && /历史\s*0\s*箱/.test(txt) && !tr.classList.contains('retiree')) {
+        tr.classList.add('retiree');
+        const last = tr.lastElementChild;
+        if (last) last.insertAdjacentHTML('beforeend', ' <span class="retiree-tag">停止销售?</span>');
+      }
+    });
+  }
+
+  // ── PO gen table: data-driven MVVM layer ──────────────────────────
+  // Parse the merged main PO gen table (first <table> inside vendor body
+  // that holds the Product/Cases/Amount/Notes columns with cat-badge in
+  // Notes) into a clean PORow[] data model, decoupled from DOM. Render
+  // and sort happen from this array; clicking a column header re-renders
+  // with a new sort. Retire / neg_stock sections stay untouched.
+  //
+  // PORow shape:
+  //   { product, brandKey, stock, cases, amount, amountText, notes,
+  //     priority ('U'|'H'|'N'), notesHtml (for rich cell) }
+  //
+  // parseMainPOTable supports both new (merged 1 table, cat-badge in notes)
+  // and legacy (3 separate tables per priority section) markdown layouts.
+  const _BRAND_SIZE_RE = /\s*\b(\d+(?:\.\d+)?)\s*(ml|l|oz|pk|pack)\b\.?/gi;
+  function _brandKeyJs(name) {
+    if (!name) return '';
+    let s = String(name).toLowerCase().replace(_BRAND_SIZE_RE, '');
+    s = s.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    return s;
+  }
+  // Extract numeric size in millilitres so sibling sizes sort in
+  // natural volume order: 187ml < 375ml < 750ml < 1.5L. Returns 0
+  // when no size is found (row still sorts but at the head of its
+  // brand group).
+  function _sizeMl(name) {
+    const m = String(name || '').match(/\b(\d+(?:\.\d+)?)\s*(ml|l|oz|pk|pack)\b/i);
+    if (!m) return 0;
+    const n = parseFloat(m[1]);
+    const u = m[2].toLowerCase();
+    if (u === 'ml') return n;
+    if (u === 'l')  return n * 1000;
+    if (u === 'oz') return n * 29.5735;
+    return n;  // pk / pack treated as small numeric
+  }
+  function _priorityFromCell(notesCell) {
+    if (!notesCell) return 'N';
+    if (notesCell.querySelector('.cat-badge.cat-urgent')) return 'U';
+    if (notesCell.querySelector('.cat-badge.cat-volatile')) return 'H';
+    if (notesCell.querySelector('.cat-badge.cat-standard')) return 'N';
+    return 'N';
+  }
+  function _stripBadgeFromHtml(html) {
+    return String(html || '')
+      .replace(/<span class="cat-badge[^"]*">[^<]*<\/span>/g, '')
+      .trim();
+  }
+  function _parseAmountNumber(s) {
+    if (!s) return 0;
+    const n = parseFloat(String(s).replace(/[^\d.-]/g, ''));
+    return isFinite(n) ? n : 0;
+  }
+  // Name -> qty_on_hand map from _products cache; fallback when LLM notes
+  // don't carry a "库存 N" value. DB is authoritative.
+  function _productStockMap() {
+    const m = new Map();
+    for (const p of (_products || [])) {
+      if (p && p.name && p.qty_on_hand != null) {
+        m.set(p.name.toLowerCase(), Number(p.qty_on_hand));
+      }
+    }
+    return m;
+  }
+  // After parsing, promote each row's priority to the highest (min rank)
+  // found across any size of the same brand. This matches user rule:
+  // "jim beam 750ml urgent + jim beam 1.75l normal -> whole brand urgent".
+  // Rationale: brand is procured as a whole; once any size triggers
+  // action, the buyer wants all siblings grouped at that urgency so
+  // assortment + freight planning stays coherent.
+  function promoteBrandPriority(rows) {
+    const brandBest = new Map();
+    for (const r of rows) {
+      const rank = _CAT_RANK[r.priority] ?? 99;
+      const prev = brandBest.get(r.brandKey);
+      if (prev == null || rank < prev) brandBest.set(r.brandKey, rank);
+    }
+    const rankToCat = ['U', 'H', 'N'];
+    for (const r of rows) {
+      const best = brandBest.get(r.brandKey);
+      if (best != null && best < 3) r.priority = rankToCat[best];
+    }
+    return rows;
+  }
+
+  function parseMainPOTable(body) {
+    if (!body) return [];
+    const stockMap = _productStockMap();
+    // Scope: first <table> that sits BEFORE any "负库存" / "建议退役" marker.
+    // Simpler rule: take only the first <table> as the main PO table. The
+    // other tables in the body are the separate retire / neg_stock tables
+    // emitted later in the markdown -- we don't touch those.
+    const table = body.querySelector('table');
+    if (!table) return [];
+    const rows = [];
+    const trList = table.querySelectorAll('tbody tr');
+    for (const tr of trList) {
+      const cells = tr.children;
+      if (cells.length < 4) continue;           // not the expected shape
+      const productCell = cells[0];
+      const casesCell   = cells[1];
+      const amountCell  = cells[2];
+      const notesCell   = cells[3];
+      const product = (productCell.textContent || '').trim();
+      if (!product) continue;
+      const priority = _priorityFromCell(notesCell);
+      const notesHtml = _stripBadgeFromHtml(notesCell.innerHTML);
+      const notesText = notesCell.textContent || '';
+      const cases = parseInt((casesCell.textContent || '').trim(), 10) || 0;
+      const amountText = (amountCell.textContent || '').trim();
+      const amount = _parseAmountNumber(amountText);
+      // Stock: POS cache first; fallback to "库存 N" regex from notes.
+      let stock = stockMap.get(product.toLowerCase());
+      if (stock == null) {
+        const m = notesText.match(/(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i);
+        stock = m ? parseInt(m[1], 10) : null;
+      }
+      rows.push({
+        product, brandKey: _brandKeyJs(product),
+        sizeMl: _sizeMl(product),
+        stock,
+        cases, amount, amountText,
+        notes: notesText.trim(),
+        notesHtml,
+        priority,
+      });
+    }
+    return promoteBrandPriority(rows);
+  }
+
+  // ── Sort: brand-adjacent default OR per-column asc/desc ───────────
+  const _CAT_RANK = { U: 0, H: 1, N: 2 };
+  function _cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+  function brandAwareSort(rows) {
+    // Mirrors services.po_regroup.regroup_within_bucket: bucket by priority,
+    // within each bucket keep brand groups contiguous, sort brand groups by
+    // min qty asc + brand alphabetical, inside brand group by (cat rank asc,
+    // qty asc, name asc). Returns a NEW array.
+    const buckets = { U: [], H: [], N: [] };
+    for (const r of rows) (buckets[r.priority] || buckets.N).push(r);
+    const out = [];
+    for (const cat of ['U', 'H', 'N']) {
+      const bucketRows = buckets[cat];
+      if (!bucketRows.length) continue;
+      const groups = new Map();
+      const order = [];
+      for (const r of bucketRows) {
+        const bk = r.brandKey || r.product.toLowerCase();
+        if (!groups.has(bk)) { groups.set(bk, []); order.push(bk); }
+        groups.get(bk).push(r);
+      }
+      for (const bk of groups.keys()) {
+        // Within a brand group: size ascending (187ml -> 1.5L), then
+        // name as stable tiebreak. All members share the same promoted
+        // priority already, so cat-rank is moot.
+        groups.get(bk).sort((a, b) =>
+          _cmp(a.sizeMl || 0, b.sizeMl || 0) ||
+          _cmp(a.product.toLowerCase(), b.product.toLowerCase())
+        );
+      }
+      order.sort((a, b) => {
+        const qa = Math.min(...groups.get(a).map(r => r.stock ?? 0));
+        const qb = Math.min(...groups.get(b).map(r => r.stock ?? 0));
+        return _cmp(qa, qb) || _cmp(a, b);
+      });
+      for (const bk of order) out.push(...groups.get(bk));
+    }
+    return out;
+  }
+  function sortRows(rows, sortCfg) {
+    if (!sortCfg || !sortCfg.col || sortCfg.dir == null) {
+      return brandAwareSort(rows);
+    }
+    const { col, dir } = sortCfg;
+    const factor = dir === 'desc' ? -1 : 1;
+    const keyFn = {
+      product : r => r.product.toLowerCase(),
+      stock   : r => r.stock ?? -Infinity,
+      cases   : r => r.cases ?? 0,
+      amount  : r => r.amount ?? 0,
+      notes   : r => (r.notes || '').toLowerCase(),
+      priority: r => _CAT_RANK[r.priority] ?? 99,
+    }[col] || (r => r.product.toLowerCase());
+    const copy = rows.slice();
+    copy.sort((a, b) => factor * _cmp(keyFn(a), keyFn(b)));
+    return copy;
+  }
+
+  // ── renderPOTable: pure function, state -> HTML string ────────────
+  // Columns: Product | Stock | Case | Amount | Notes | Priority.
+  // Headers are sortable (click -> toggle dir; handled in next commit).
+  // Restock highlight class applied at render time from _products cache
+  // (reorder_level > qty_on_hand -> row class "row-restock-high").
+  function renderPOTable(rows, sortCfg) {
+    const sorted = sortRows(rows, sortCfg);
+    const prodMeta = new Map();
+    for (const p of (_products || [])) {
+      if (p && p.name) prodMeta.set(p.name.toLowerCase(), p);
+    }
+    const cur = sortCfg || { col: 'priority', dir: null };
+    const sortClass = (col) => {
+      if (cur.col !== col || cur.dir == null) return '';
+      return cur.dir === 'asc' ? ' sort-asc' : ' sort-desc';
+    };
+    const head = [
+      ['product',  'PRODUCT'],  ['stock',    'STOCK'],
+      ['cases',    'CASE'],     ['amount',   'AMOUNT'],
+      ['notes',    'NOTES'],    ['priority', 'PRIORITY'],
+    ].map(([k, label]) =>
+      `<th class="sortable col-${k}${sortClass(k)}" data-col="${k}">${label}</th>`
+    ).join('');
+    const body = sorted.map((r) => {
+      const meta = prodMeta.get(r.product.toLowerCase());
+      const restock = meta && (meta.reorder_level || 0) > 0
+                            && (meta.qty_on_hand || 0) < meta.reorder_level;
+      const cls = restock ? ' class="row-restock-high"' : '';
+      const titleAttr = restock
+        ? ` title="reorder ${meta.reorder_level} btl > instock ${meta.qty_on_hand} btl"`
+        : '';
+      const stock = r.stock == null ? '-' : r.stock;
+      const amt   = r.amountText || '';
+      const prio  = (r.priority || 'N').toLowerCase();
+      const prioLabel = r.priority === 'U' ? '急需'
+                     : r.priority === 'H' ? '热卖'
+                     : '正常';
+      return `<tr${cls}${titleAttr}>
+        <td class="col-product">${escapeHtml(r.product)}</td>
+        <td class="col-stock">${escapeHtml(String(stock))}</td>
+        <td class="col-cases">${r.cases}</td>
+        <td class="col-amount">${escapeHtml(amt)}</td>
+        <td class="col-notes">${r.notesHtml}</td>
+        <td class="col-priority"><span class="prio-badge prio-${prio}">${prioLabel}</span></td>
+      </tr>`;
+    }).join('');
+    return `<table class="po-main-table" data-new-table="1">
+      <thead><tr>${head}</tr></thead>
+      <tbody>${body || '<tr><td colspan="6" class="placeholder">_(无订单行)_</td></tr>'}</tbody>
+    </table>`;
+  }
+
+  // Toggle sort config on header click.
+  // priority col: always reset to default (brand-aware).
+  // other cols: cycle asc -> desc -> default.
+  function _toggleSort(cur, col) {
+    if (col === 'priority') return { col: 'priority', dir: null };
+    if (cur.col !== col) return { col, dir: 'asc' };
+    if (cur.dir === 'asc') return { col, dir: 'desc' };
+    // desc or anything else -> back to default
+    return { col: 'priority', dir: null };
+  }
+
+  // Delegated click: find the nearest .po-main-wrap + its viewState,
+  // toggle sort, re-render just this wrapper.
+  document.addEventListener('click', (e) => {
+    const th = e.target.closest('th.sortable[data-col]');
+    if (!th) return;
+    const wrapper = th.closest('.po-main-wrap');
+    if (!wrapper || !wrapper._poViewState) return;
+    e.stopPropagation();
+    const state = wrapper._poViewState;
+    state.sort = _toggleSort(state.sort, th.dataset.col);
+    wrapper.innerHTML = renderPOTable(state.rows, state.sort);
+  });
+
+  // Parse first <table> and REPLACE it with the new data-driven table.
+  // Stashes viewState on the wrapper element for the click handler.
+  function installPOMainTable(body) {
+    if (!body) return false;
+    const rows = parseMainPOTable(body);
+    if (!rows.length) return false;
+    const state = { rows, sort: { col: 'priority', dir: null } };
+    const mainTable = body.querySelector('table');
+    if (!mainTable) return false;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'po-main-wrap';
+    wrapper.innerHTML = renderPOTable(state.rows, state.sort);
+    wrapper._poViewState = state;
+    mainTable.replaceWith(wrapper);
+    return true;
+  }
+
+  // Pull "库存 N" out of the rightmost (notes) cell into a new second
+  // column so numeric inventory gets dedicated space and the notes column
+  // is less crowded. Run AFTER flagRetireeRows so the retiree-tag HTML is
+  // present in the notes cell before we touch it.
+  function extractInstockColumn(root) {
+    // Cache-first: build a product-name -> qty_on_hand map from _products
+    // (the POS-backed product-names response). This is the authoritative
+    // stock value -- never depend on whether the LLM chose to include
+    // "库存 N" in notes (it sometimes omits it, leaving stock col empty).
+    const byName = new Map();
+    for (const p of (_products || [])) {
+      if (p && p.name && p.qty_on_hand != null) {
+        byName.set(p.name.toLowerCase(), Number(p.qty_on_hand));
+      }
+    }
+    // Fallback: also look for the pattern in notes when name lookup misses.
+    const INSTOCK_RE = /(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i;
+    root.querySelectorAll('table').forEach(table => {
+      if (table.dataset.instockAdded === '1') return;  // idempotent
+      const rows = Array.from(table.querySelectorAll('tr'));
+      // Only tables with >=4 original cells (product | cases | amount | notes)
+      // get the transform.
+      if (!rows.length) return;
+      const firstRowCellCount = rows[0].children.length;
+      if (firstRowCellCount < 4) return;
+      rows.forEach(row => {
+        const cells = Array.from(row.children);
+        const notesCell = cells[cells.length - 1];  // rightmost existing cell
+        const isHeader = notesCell.tagName === 'TH';
+        const newCell = document.createElement(isHeader ? 'th' : 'td');
+        if (isHeader) {
+          newCell.textContent = currentLang === 'en' ? 'Stock' : '库存';
+        } else {
+          // Prefer POS cache value keyed by product name.
+          const prodCell = cells[0];
+          const pname = (prodCell?.textContent || '').trim().toLowerCase();
+          const cached = byName.get(pname);
+          if (cached != null) {
+            newCell.textContent = String(cached);
+          } else {
+            // Cache miss -> try notes pattern as fallback.
+            const notesText = notesCell.textContent || '';
+            const m = notesText.match(INSTOCK_RE);
+            newCell.textContent = m ? m[1] : '-';
+          }
+          // Always strip 库存 N from notes so we never double-display.
+          const STOCK_STRIP = /(?:库存|在库|现库|stock|instock)\s*[:：]?\s*-?\d+/gi;
+          let html = notesCell.innerHTML;
+          html = html
+            .replace(new RegExp('\\s*[·・]\\s*' + STOCK_STRIP.source, 'gi'), '')
+            .replace(new RegExp(STOCK_STRIP.source + '\\s*[·・]\\s*', 'gi'), '')
+            .replace(STOCK_STRIP, '')
+            .replace(/^\s*[·・]\s*|\s*[·・]\s*$/g, '')
+            .trim();
+          notesCell.innerHTML = html;
+        }
+        row.insertBefore(newCell, cells[1]);  // slot between product and cases
+      });
+      // Rename header cells post-insert so view matches editor & i18n dict.
+      // Column indices after insert: 0=Product 1=Stock 2=Cases 3=Amount 4=Notes
+      const headerRow = rows.find(r => r.querySelector('th'));
+      if (headerRow) {
+        const ths = headerRow.querySelectorAll('th');
+        if (ths[0]) ths[0].textContent = t('col.product');
+        if (ths[2]) ths[2].textContent = t('col.cases');
+        if (ths[3]) ths[3].textContent = t('col.amount');
+        if (ths[4]) ths[4].textContent = t('col.notes');
+      }
+      table.dataset.instockAdded = '1';
+    });
+  }
+
+  // For any row cell whose content is clipped by overflow:hidden +
+  // text-overflow:ellipsis, add a title attribute so the full text appears
+  // as a tooltip on hover. Scans after render so tables built by marked.js
+  // get tooltips without editing the markdown.
+  function addCellTitlesForTruncation(root) {
+    root.querySelectorAll('td').forEach(td => {
+      if (td.hasAttribute('title')) return;
+      const full = td.textContent.trim();
+      if (full) td.setAttribute('title', full);
+    });
+  }
+
+  // Flag rows where the product's reorder threshold (product.reOrder, in
+  // BOTTLES) exceeds what is currently on hand (product.inStock, also
+  // bottles). Semantically: this product is the reason the LLM put the
+  // line in the PO (restock > instock triggers reorder). Discontinued
+  // products carry negative reorder_level and are skipped automatically.
+  function flagRestockOverStockRows(root) {
+    if (!Array.isArray(_products) || !_products.length) return;
+    const byName = new Map();
+    for (const p of _products) {
+      if (!p || !p.name) continue;
+      byName.set(p.name.toLowerCase(), p);
+    }
+    root.querySelectorAll('table').forEach(table => {
+      table.querySelectorAll('tbody tr, tr').forEach(tr => {
+        if (tr.querySelector('th')) return;
+        if (tr.classList.contains('row-restock-high')) return;
+        const prodCell = tr.children[0];
+        const name = (prodCell?.textContent || '').trim().toLowerCase();
+        if (!name) return;
+        const p = byName.get(name);
+        if (!p || p.reorder_level == null || p.qty_on_hand == null) return;
+        const reorder = Number(p.reorder_level);
+        const stock   = Number(p.qty_on_hand);
+        if (!(reorder > 0 && reorder > stock)) return;  // skip 0 / negative / already-stocked
+        tr.classList.add('row-restock-high');
+        tr.setAttribute('title',
+          `reorder threshold ${reorder} btl > instock ${stock} btl -- triggers restock`);
+      });
+    });
+  }
+
+  const setBusy = (busy) => {
+    generating = busy;
+    sendBtn.disabled = busy || !sessionId;
+    // Input stays ENABLED during generation so user can draft a follow-up;
+    // send is blocked until generation completes to keep the session sane.
+    msgInput.disabled = false;
+  };
+
+  async function loadStores() {
+    try {
+      const r = await fetch('/api/stores');
+      const stores = await r.json();
+      storeSel.innerHTML = `<option value="" data-i18n="store.select">${t('store.select')}</option>` +
+        stores.map(s => `<option value="${s.store_id}">${s.name}</option>`).join('');
+    } catch (e) {
+      storeSel.innerHTML = '<option>加载失败</option>';
+      addMsg('加载门店失败: ' + e.message, 'sys');
+    }
+  }
+
+  async function loadVendors(storeId) {
+    vendorSel.disabled = true;
+    vendorSel.innerHTML = '<option value="">加载中…</option>';
+    try {
+      const r = await fetch(`/api/stores/${storeId}/vendors`);
+      const vendors = await r.json();
+      if (!vendors.length) {
+        vendorSel.innerHTML = '<option>此门店无供应商</option>';
+        return;
+      }
+      vendorSel.innerHTML = `<option value="" data-i18n="vendor.select">${t('vendor.select')}</option>` +
+        vendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+      vendorSel.disabled = false;
+    } catch (e) {
+      vendorSel.innerHTML = '<option>加载失败</option>';
+      addMsg('加载供应商失败: ' + e.message, 'sys');
+    }
+  }
+
+  // ==================================================================
+  // WebSocket client for /ws/reorder
+  //
+  // Replaces the earlier SSE reader. One WebSocket carries the full saga:
+  // generate -> N edits -> stop. Handshake URL: /ws/reorder?store_id&vendor_id.
+  //
+  // See docs/superpowers/specs/2026-04-16-sse-to-websocket-design.md.
+  // ==================================================================
+
+  let _ws = null;                 // current WebSocket
+  let _wsStoreId = null;          // saga store bound to the current _ws
+  let _wsVendorId = null;         // saga vendor
+  let _wsResumeSid = null;        // if disconnect happened mid-stream, try resume once
+  let _wsCallbacks = null;        // {onToken, onDone, onError, onPoReplace, onProgress, onSession}
+  let _wsHeartbeatHandle = null;  // client-driven ping interval
+  let _wsLastSentAt = 0;
+  const _WS_HEARTBEAT_MS = 40 * 1000;
+
+  function _wsDispatchFrame(evt) {
+    if (evt.type === 'session') {
+      sessionId = evt.content;
+      _wsResumeSid = evt.content;
+      if (_wsCallbacks && _wsCallbacks.onSession) _wsCallbacks.onSession(evt.content);
+      return;
+    }
+    if (evt.type === 'po_replace') {
+      poBuffer = evt.content;
+      if (!_viewingHistoryId) setPO(poBuffer, true);
+      return;
+    }
+    if (evt.type === 'progress') {
+      // Spinner progress (starts with Braille glyph) = transient, replace prev.
+      // Non-spinner = milestone: promote existing transient in place.
+      //
+      // Per-batch counter: each spinner update for the same batch N/M
+      // bumps a visible counter ("批次 7/19 · 1 · 生成中…" -> "· 2 ·" ...)
+      // so the user can confirm the stream is alive. Counter resets when
+      // the batch number changes.
+      // sys messages land in logBody as .log-line (see addMsg), NOT .msg.sys.
+      // The correct selector to find the prior transient progress row is
+      // therefore .log-line.transient.
+      const existing = logBody.querySelector('.log-line.transient');
+      const isSpinner = /^[\u280B\u2819\u2839\u2838\u283C\u2834\u2826\u2827\u2807\u280F]/.test(evt.content);
+      const BATCH_RE = /^(批次\s*(\d+)\s*\/\s*(\d+))\s*[·\s]+(.*)$/;
+      if (isSpinner) {
+        const clean = evt.content.replace(/^[\u280B\u2819\u2839\u2838\u283C\u2834\u2826\u2827\u2807\u280F]\s*/, '');
+        const bm = clean.match(BATCH_RE);
+        let display = clean;
+        let batchN = '', count = 1;
+        if (bm) {
+          batchN = bm[2];
+          const prevN = existing?.dataset.batchN;
+          const prevC = parseInt(existing?.dataset.count || '0', 10);
+          count = (prevN === batchN) ? (prevC + 1) : 1;
+          display = `${bm[1]} · ${count} · ${bm[4]}`;
+        }
+        const html = '<span class="spinner-dot"></span>' + display;
+        if (existing) {
+          existing.innerHTML = html;
+          if (bm) {
+            existing.dataset.batchN = batchN;
+            existing.dataset.count = String(count);
+          }
+        } else {
+          const d = addMsg('', 'sys');
+          d.classList.add('transient');
+          if (bm) {
+            d.dataset.batchN = batchN;
+            d.dataset.count = String(count);
+          }
+          d.innerHTML = html;
+        }
+      } else {
+        // Milestone: reshape text so "生成中…" becomes "完成" semantically.
+        // Reuse the counter from the just-completed batch if it matches.
+        const needsPrefix = !/^[\u2713\u2717\u26A0\u2714\u274C]/.test(evt.content);
+        let text = (needsPrefix ? '... ' : '') + evt.content;
+        const bm = evt.content.match(/(批次\s*(\d+)\s*\/\s*\d+)/);
+        if (bm && existing && existing.dataset.batchN === bm[2]) {
+          const n = parseInt(existing.dataset.count || '0', 10);
+          // Inject " · K · 完成" right after "批次 N/M" in the milestone text.
+          text = text.replace(bm[1], `${bm[1]} · ${n} · 完成`);
+        }
+        if (existing) {
+          existing.innerHTML = '';
+          existing.textContent = text;
+          existing.classList.remove('transient');
+          delete existing.dataset.batchN;
+          delete existing.dataset.count;
+        } else {
+          addMsg(text, 'sys');
+        }
+      }
+      return;
+    }
+    if (evt.type === 'token') {
+      if (_wsCallbacks && _wsCallbacks.onToken) _wsCallbacks.onToken(evt.content);
+      return;
+    }
+    if (evt.type === 'done') {
+      if (_wsCallbacks && _wsCallbacks.onDone) _wsCallbacks.onDone();
+      return;
+    }
+    if (evt.type === 'error') {
+      if (_wsCallbacks && _wsCallbacks.onError) _wsCallbacks.onError(evt.content);
+      return;
+    }
+    if (evt.type === 'pong') {
+      // nothing to do
+      return;
+    }
+  }
+
+  function _wsStartHeartbeat() {
+    _wsStopHeartbeat();
+    _wsHeartbeatHandle = setInterval(() => {
+      if (!_ws || _ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - _wsLastSentAt < _WS_HEARTBEAT_MS) return;
+      _wsSendRaw({ action: 'ping' });
+    }, Math.floor(_WS_HEARTBEAT_MS / 2));
+  }
+
+  function _wsStopHeartbeat() {
+    if (_wsHeartbeatHandle) { clearInterval(_wsHeartbeatHandle); _wsHeartbeatHandle = null; }
+  }
+
+  function _wsSendRaw(obj) {
+    if (!_ws || _ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      _ws.send(JSON.stringify(obj));
+      _wsLastSentAt = Date.now();
+      return true;
+    } catch (e) {
+      console.warn('ws.send failed:', e);
+      return false;
+    }
+  }
+
+  function _wsBuildURL(storeId, vendorId, resumeSid) {
+    const scheme = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+    let url = scheme + '//' + location.host + '/ws/reorder'
+      + '?store_id=' + encodeURIComponent(storeId)
+      + '&vendor_id=' + encodeURIComponent(vendorId);
+    if (resumeSid) url += '&resume=' + encodeURIComponent(resumeSid);
+    return url;
+  }
+
+  function _wsOpen(storeId, vendorId, onOpen, onError) {
+    // Close any existing socket first.
+    if (_ws && _ws.readyState !== WebSocket.CLOSED) {
+      try { _ws.close(1000, 'new saga'); } catch (_) {}
+    }
+    const resume = (_wsStoreId === storeId && _wsVendorId === vendorId) ? _wsResumeSid : null;
+    const url = _wsBuildURL(storeId, vendorId, resume);
+    _wsStoreId = storeId;
+    _wsVendorId = vendorId;
+
+    const ws = new WebSocket(url);
+    _ws = ws;
+
+    ws.onopen = () => {
+      _wsStartHeartbeat();
+      if (onOpen) onOpen();
+    };
+    ws.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        _wsDispatchFrame(evt);
+      } catch (err) {
+        console.warn('ws: bad JSON frame', err, e.data);
+      }
+    };
+    ws.onerror = (e) => {
+      console.warn('ws: error event', e);
+    };
+    ws.onclose = (e) => {
+      _wsStopHeartbeat();
+      // If we were mid-action, surface as error so the UI can clean up.
+      if (_wsCallbacks && _wsCallbacks.onClose) _wsCallbacks.onClose(e);
+    };
+  }
+
+  function wsCancel() {
+    // Tell server to stop the current task; WS stays open for next action.
+    _wsSendRaw({ action: 'stop' });
+  }
+
+  async function streamAction(storeId, vendorId, actionFrame, cb) {
+    // cb = {onToken, onDone, onError, onSession?, onPoReplace?, onProgress?, onClose?}
+    _wsCallbacks = cb;
+    // Reuse existing WS if same saga.
+    if (_ws && _ws.readyState === WebSocket.OPEN
+        && _wsStoreId === storeId && _wsVendorId === vendorId) {
+      _wsSendRaw(actionFrame);
+      return;
+    }
+    _wsOpen(storeId, vendorId, () => {
+      _wsSendRaw(actionFrame);
+    });
+  }
+
+  window.addEventListener('beforeunload', () => {
+    _wsStopHeartbeat();
+    if (_ws && _ws.readyState === WebSocket.OPEN) {
+      try { _ws.close(1000, 'page unload'); } catch (_) {}
+    }
+  });
+
+  const timerEl = document.getElementById('timer');
+  let _timerHandle = null;
+  const fmtElapsed = (s) => {
+    const m = Math.floor(s / 60), sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  };
+  const startTimer = () => {
+    if (_timerHandle) clearInterval(_timerHandle);
+    const t0 = Date.now();
+    timerEl.textContent = fmtElapsed(0);
+    timerEl.style.color = '#888';
+    _timerHandle = setInterval(() => {
+      timerEl.textContent = fmtElapsed(Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+  };
+  const stopTimer = (ok) => {
+    if (_timerHandle) { clearInterval(_timerHandle); _timerHandle = null; }
+    if (timerEl.textContent) {
+      timerEl.textContent = (ok ? '✓ ' : '✗ ') + timerEl.textContent.replace(/^/, '耗时 ');
+      timerEl.style.color = ok ? '#2e8540' : '#c62828';
+    }
+    if (ok) {
+      // Freeze the cache-age clock to mark "work done". The clock may have
+      // been wiped by setCacheDone / setCacheBusy / updateCacheAge during
+      // generation, so recreate via ensureCacheClock first.
+      ensureCacheClock();
+      const clock = cacheAgeEl.querySelector('.clock-spin');
+      if (clock) clock.classList.add('paused');
+    }
+    // Freeze any lingering transient spinner so the spinner stops rotating.
+    // sys messages live in logBody as .log-line (not .msg.sys).
+    logBody.querySelectorAll('.log-line.transient').forEach(el => {
+      el.innerHTML = el.textContent;
+      el.classList.remove('transient');
+    });
+  };
+
+  async function generatePO() {
+    const storeId = storeSel.value;
+    const vendorId = vendorSel.value;
+    if (!storeId || !vendorId) return;
+    setBusy(true);
+    cancelBtn.style.display = '';
+    sessionId = null;
+    _wsResumeSid = null;
+    poBuffer = '';
+    setEmailEnabled(false);
+    emailBtn.innerHTML = '<span class="btn-icon">\u2709</span> 发送邮件';
+    setPO('正在生成建议…', true);
+    addMsg(`开始为「${storeSel.selectedOptions[0].text}」生成 ${vendorSel.selectedOptions[0].text} 的采购建议…`, 'sys');
+    startTimer();
+
+    // If user was viewing history, snap back to live for the new generation
+    if (_viewingHistoryId) backToLive();
+
+    await streamAction(
+      storeId, vendorId,
+      { action: 'generate' },
+      {
+        onToken: (tok) => {
+          poBuffer += tok;
+          if (!_viewingHistoryId) setPO(poBuffer, true);
+        },
+        onDone: () => {
+          cancelBtn.style.display = 'none';
+          setPO(poBuffer, false);
+          generating = false;
+          sendBtn.disabled = !sessionId;
+          msgInput.disabled = false;
+          stopTimer(true);
+          if (poBuffer && poBuffer.length > 50) {
+            const totals = parseTotals(poBuffer);
+            // New PO goes directly to the multi-vendor panel (not the
+            // drawer). User can move it back to the drawer via each
+            // vendor sub-panel's close (x) button.
+            const sid = storeId, vid = vendorId;
+            const existing = _poPanel.vendors.find(v =>
+              v.storeId === sid && v.vendorId === vid);
+            const entry = {
+              id: existing ? existing.id
+                           : 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+              storeId: sid,
+              storeName: storeSel.selectedOptions[0]?.text || sid,
+              vendorId: vid,
+              vendorName: vendorSel.selectedOptions[0]?.text || vid,
+              ts: Date.now(),
+              markdown: poBuffer,
+              cases: totals.cases,
+              amount: totals.amount,
+            };
+            upsertPanelVendor(entry);
+            setEmailEnabled(true);
+            emailBtn.innerHTML = '<span class="btn-icon">\u2709</span> 发送邮件';
+          }
+          setBusy(false);
+        },
+        onError: (err) => {
+          cancelBtn.style.display = 'none';
+          addMsg('错误: ' + err, 'sys');
+          setPO(poBuffer || '(失败)', false);
+          setBusy(false);
+          stopTimer(false);
+        },
+        onClose: (e) => {
+          // Unexpected close mid-stream (ie we never got onDone/onError)
+          if (generating) {
+            cancelBtn.style.display = 'none';
+            addMsg('连接中断 (code=' + e.code + '),请重新生成', 'sys');
+            setPO(poBuffer || '(失败)', false);
+            setBusy(false);
+            stopTimer(false);
+          }
+        },
+      }
+    );
+  }
+
+  function cancelSSE() {
+    // Backwards-compat name retained for existing callers; now sends ws stop.
+    wsCancel();
+  }
+
+  async function sendEdit() {
+    const msg = msgInput.value.trim();
+    if (!msg || generating) return;
+
+    // Smart dispatch:
+    // 1. If user selected a product from autocomplete and input matches → GO path
+    // 2. Else if sessionId exists → edit path
+    // 3. Else warn
+    if (_goPending && msg === _goPending.name) {
+      const product = _goPending;
+      _goPending = null;
+      await triggerGoFromProduct(product);
+      return;
+    }
+    if (!sessionId) {
+      // Ad-hoc product lookup mode — no PO generated yet, user wants to
+      // check inventory for a product by name.
+      const sid = storeSel.value;
+      if (!sid) { addMsg('⚠ 请先选门店', 'sys'); return; }
+      addMsg(msg, 'user');
+      msgInput.value = '';
+      updateModeHint();
+      try {
+        const r = await fetch(`/api/stores/${encodeURIComponent(sid)}/product-lookup?name=${encodeURIComponent(msg)}`);
+        const data = await r.json();
+        if (!data.found) {
+          addMsg(`✗ 没找到「${msg}」`, 'sys');
+        } else {
+          const more = data.more_matches > 0 ? ` (+${data.more_matches} 个匹配)` : '';
+          addMsg(
+            `📦 ${data.name}${more}\n` +
+            `库存 ${data.qty_on_hand} · 补货线 ${data.reorder_level} · 7天售 ${data.sales_7d} · 30天 ${data.sales_30d} · 180天 ${data.sales_180d}\n` +
+            `供应商: ${data.vendor_name || '-'} · 单价 $${(data.cost || 0).toFixed(2)}`,
+            'ai'
+          );
+        }
+      } catch (e) {
+        addMsg('查询失败: ' + e.message, 'sys');
+      }
+      return;
+    }
+
+    addMsg(msg, 'user');
+    msgInput.value = '';
+    updateModeHint();
+    setBusy(true);
+    poBuffer = '';
+    setPO('更新中…', true);
+    startTimer();
+
+    await streamAction(
+      _wsStoreId || storeSel.value,
+      _wsVendorId || vendorSel.value,
+      { action: 'edit', message: msg },
+      {
+        onToken: (tok) => { poBuffer += tok; setPO(poBuffer, true); },
+        onDone: () => {
+          setPO(poBuffer, false);
+          addMsg('(已更新上方采购建议)', 'ai');
+          setBusy(false);
+          stopTimer(true);
+        },
+        onError: (err) => {
+          addMsg('错误: ' + err, 'sys');
+          setPO(poBuffer, false);
+          setBusy(false);
+          stopTimer(false);
+        },
+        onClose: (e) => {
+          if (generating) {
+            addMsg('连接中断 (code=' + e.code + '),请重试', 'sys');
+            setPO(poBuffer, false);
+            setBusy(false);
+            stopTimer(false);
+          }
+        },
+      }
+    );
+  }
+
+  // ─── Order history drawer (LocalStorage persisted) ──────────────
+  const drawerEl = document.getElementById('drawer');
+  const drawerToggleEl = document.getElementById('drawerToggle');
+  const drawerListEl = document.getElementById('drawerList');
+  const drawerClearEl = document.getElementById('drawerClear');
+
+  const HISTORY_KEY = 'eip_order_history_v1';
+  const HISTORY_MAX = 50;      // cap so LocalStorage stays small
+  let _orderHistory = [];       // [{id, storeId, storeName, vendorId, vendorName, ts, markdown, cases, amount}]
+  let _viewingHistoryId = null; // legacy: kept for compat with editor code paths
+
+  // Phase-1 multi-vendor PO panel. Vendors live here OR in _orderHistory,
+  // never both (exclusive). Drawer is the "archive"; panel is the active
+  // review surface.
+  const PANEL_KEY = 'eip_po_panel_v1';
+  let _poPanel = { vendors: [] };  // same shape as history entries
+  // Hoisted here (earlier than its original location) so renderPOPanel
+  // at startup can read it without TDZ ReferenceError.
+  let _editingPO = null;  // { parsed, targetId, vendorEntry? }
+  // emailBtn + setEmailEnabled hoisted for the same reason -- renderPOPanel
+  // enables/disables the email action based on panel content at startup.
+  const emailBtn = document.getElementById('emailBtn');
+  const setEmailEnabled = (on) => { if (emailBtn) emailBtn.disabled = !on; };
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      _orderHistory = raw ? JSON.parse(raw) : [];
+    } catch { _orderHistory = []; }
+    renderHistory();
+  }
+
+  function loadPanel() {
+    try {
+      const raw = localStorage.getItem(PANEL_KEY);
+      const p = raw ? JSON.parse(raw) : null;
+      _poPanel = (p && Array.isArray(p.vendors)) ? p : { vendors: [] };
+      console.log('[loadPanel] %d vendors restored from localStorage',
+        _poPanel.vendors.length);
+    } catch (e) {
+      console.warn('loadPanel failed:', e);
+      _poPanel = { vendors: [] };
+    }
+  }
+  function savePanel() {
+    try {
+      const s = JSON.stringify(_poPanel);
+      localStorage.setItem(PANEL_KEY, s);
+      console.debug('[savePanel] %d vendors, %d bytes',
+        _poPanel.vendors.length, s.length);
+    }
+    catch (e) { console.warn('savePanel failed:', e); }
+  }
+
+  function upsertPanelVendor(entry) {
+    const idx = _poPanel.vendors.findIndex(v =>
+      v.storeId === entry.storeId && v.vendorId === entry.vendorId);
+    if (idx >= 0) _poPanel.vendors[idx] = { ..._poPanel.vendors[idx], ...entry };
+    else _poPanel.vendors.unshift(entry);
+    savePanel();
+    renderPOPanel();
+  }
+  function movePreorderToPanel(id) {
+    const entry = _orderHistory.find(e => e.id === id);
+    if (!entry) return;
+    // Normalize totals off the markdown rows -- stored values may be stale
+    // zeros from server-side parse_totals' brittle regex.
+    const tt = parseTotals(entry.markdown || '');
+    entry.cases = tt.cases;
+    entry.amount = tt.amount;
+    _orderHistory = _orderHistory.filter(e => e.id !== id);
+    saveHistory(); renderHistory();
+    // Auto-switch store selector so the moved vendor lands in the right
+    // store's panel (panel is store-scoped). Firing 'change' runs the
+    // normal handler: loadVendors, loadAllProductNames, renderPOPanel.
+    if (entry.storeId && storeSel.value !== entry.storeId) {
+      // only switch if the option actually exists in the dropdown
+      const exists = Array.from(storeSel.options).some(o => o.value === entry.storeId);
+      if (exists) {
+        storeSel.value = entry.storeId;
+        storeSel.dispatchEvent(new Event('change'));
+      }
+    }
+    upsertPanelVendor(entry);
+  }
+  function returnVendorToDrawer(id) {
+    const v = _poPanel.vendors.find(x => x.id === id);
+    if (!v) return;
+    _poPanel.vendors = _poPanel.vendors.filter(x => x.id !== id);
+    savePanel();
+    _orderHistory.unshift(v);
+    saveHistory(); renderHistory();
+    renderPOPanel();
+  }
+
+  function saveHistory() {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(_orderHistory)); }
+    catch (e) { console.warn('history save failed', e); }
+  }
+
+  function parseAmountNumber(s) {
+    if (!s) return 0;
+    const n = parseFloat(String(s).replace(/[^\d.-]/g, ''));
+    return isFinite(n) ? n : 0;
+  }
+
+  function parseTotals(md) {
+    // Compute totals from actual rows, not by matching a "**Total: X**"
+    // label in the markdown -- the LLM sometimes writes that label wrong
+    // (drifts, double-counts, etc). Rows are the source of truth.
+    //
+    // Exclude "retire / discontinued" sections: those rows are informational
+    // (on-hand stock, aging counts) not items we're ordering. Summing them
+    // would inflate the vendor total (e.g. retire row qty 436 -> bogus 458).
+    const parsed = parsePOMarkdown(md);
+    let cases = 0, amount = 0;
+    for (const s of parsed.sections) {
+      if (/建议退役|retire|discontinu/i.test(s.title)) continue;
+      for (const r of s.rows) {
+        cases += r.cases || 0;
+        amount += parseAmountNumber(r.amount);
+      }
+    }
+    return { cases, amount };
+  }
+
+  function pushHistory(entry) {
+    // One entry per (store, vendor) -- always replace any prior entry
+    // (preorder or user-generated, any age). Drawer shows at most one
+    // row per vendor pair; new generation supersedes the old.
+    _orderHistory = _orderHistory.filter(e =>
+      !(e.storeId === entry.storeId && e.vendorId === entry.vendorId)
+    );
+    _orderHistory.unshift(entry);
+    if (_orderHistory.length > HISTORY_MAX) _orderHistory.length = HISTORY_MAX;
+    saveHistory();
+    renderHistory();
+  }
+
+  function renderHistory() {
+    if (!_orderHistory.length) {
+      drawerListEl.innerHTML = `<div class="drawer-empty">${t('drawer.empty')}</div>`;
+      return;
+    }
+    drawerListEl.innerHTML = _orderHistory.map(e => {
+      const isActive = e.id === _viewingHistoryId;
+      const timeAgo = formatAgo(Date.now() - e.ts);
+      const storeAlias = (e.storeName || '').split(/\s+/)[0] || '';
+      const title = storeAlias
+        ? `${escapeHtml(storeAlias)} · ${escapeHtml(e.vendorName || e.vendorId)}`
+        : escapeHtml(e.vendorName || e.vendorId);
+      return `<div class="drawer-item${isActive ? ' active' : ''}" data-id="${e.id}">
+        <div class="drawer-item-vendor">${title}</div>
+        <div class="drawer-item-stats">
+          <span>${e.cases} ${t('unit.cases')}</span>
+          <span class="amt">$${(e.amount || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>
+        </div>
+        <div class="drawer-item-time">${escapeHtml(e.storeName || '')} · ${timeAgo}</div>
+        <button class="drawer-item-move" data-id="${e.id}" title="${t('tooltip.to_panel')}" aria-label="${t('tooltip.to_panel')}">${ICON_ARROW_RIGHT}</button>
+        <button class="drawer-item-copy" data-id="${e.id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
+        <button class="drawer-item-del" data-id="${e.id}" title="${t('tooltip.delete')}" aria-label="${t('tooltip.delete')}">${ICON_TRASH}</button>
+      </div>`;
+    }).join('');
+  }
+
+  function formatAgo(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s 前`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}min 前`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h 前`;
+    const d = Math.floor(h / 24);
+    return `${d}d 前`;
+  }
+
+  function viewHistoryItem(id) {
+    const entry = _orderHistory.find(e => e.id === id);
+    if (!entry) return;
+    _viewingHistoryId = id;
+    const banner = `<div class="history-banner">
+      <span>📜 正在查看历史订单(${escapeHtml(entry.vendorName || entry.vendorId)},${formatAgo(Date.now() - entry.ts)})</span>
+      <button id="backToLive">返回当前</button>
+    </div>`;
+    poBody.innerHTML = banner + (window.marked ? window.marked.parse(entry.markdown) : entry.markdown);
+    document.getElementById('backToLive')?.addEventListener('click', backToLive);
+    wrapSectionsIntoAccordion(entry.markdown || '');
+    attachSectionCopyButtons(entry.markdown || '');
+    renderHistory();
+    // Enable email when the viewed entry has actual PO content.
+    setEmailEnabled(!!(entry.markdown && entry.markdown.length > 50));
+  }
+
+  function backToLive() {
+    _viewingHistoryId = null;
+    renderPOPanel();
+  }
+
+  function renderPOPanel() {
+    // Editor mode owns poBody entirely; skip.
+    if (typeof _editingPO !== 'undefined' && _editingPO) return;
+    // Snapshot accordion open/closed state before we nuke the DOM.
+    const openStates = {};
+    poBody.querySelectorAll('details[data-state-key]').forEach(d => {
+      openStates[d.dataset.stateKey] = d.open;
+    });
+    // Filter panel to vendors of the currently selected store. Panel
+    // keeps all stores' data persistently (cross-store data not lost),
+    // but only the active store's vendors are shown.
+    const currentStoreId = storeSel.value || '';
+    const displayVendors = currentStoreId
+      ? (_poPanel.vendors || []).filter(v => v.storeId === currentStoreId)
+      : [];
+    if (displayVendors.length === 0) {
+      poBody.className = '';
+      poBody.innerHTML = `<div class="placeholder">${t('placeholder.po_init')}</div>`;
+      setEmailEnabled(false);
+      return;
+    }
+    poBody.className = '';
+    // Grand total across all displayed vendors of the current store.
+    let grandCases = 0, grandAmount = 0;
+    for (const v of displayVendors) {
+      const tt = parseTotals(v.markdown || '');
+      grandCases += tt.cases || 0;
+      grandAmount += tt.amount || 0;
+    }
+    const grandAmtTxt = grandAmount.toLocaleString(undefined, {maximumFractionDigits: 0});
+    const summaryHTML = `<div class="panel-summary">
+      <span class="ps-label">${currentLang === 'en' ? 'Order total' : '订单总计'}:</span>
+      <b>${grandCases}</b> ${t('unit.cases')}
+      <span class="ps-sep">&middot;</span>
+      <b>$${grandAmtTxt}</b>
+      <span class="ps-sep">&middot;</span>
+      ${displayVendors.length} ${currentLang === 'en' ? 'vendors' : '家供应商'}
+    </div>`;
+    poBody.innerHTML = summaryHTML + displayVendors.map(v => {
+      const nm = escapeHtml(v.vendorName || v.vendorId || '');
+      const id = escapeHtml(v.id || '');
+      // Recompute stats from markdown rows every render -- trust the
+      // parser, not any stored cases/amount (which may be stale zeros
+      // from the server-side regex).
+      const fresh = parseTotals(v.markdown || '');
+      const cases = fresh.cases;
+      const amt = fresh.amount.toLocaleString(undefined, {maximumFractionDigits: 0});
+      const mdHtml = window.marked
+        ? window.marked.parse(v.markdown || '')
+        : escapeHtml(v.markdown || '');
+      return `<details class="vendor-panel" data-vendor-id="${id}" data-state-key="vendor:${id}" open>
+        <summary class="vendor-panel-head" onclick="if(event.target.closest('.vendor-actions')){event.preventDefault();}">
+          <span class="vendor-head-left">
+            <span class="vendor-name">${nm}</span>
+            <span class="vendor-actions">
+              <button class="vendor-copy" data-id="${id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
+              <button class="vendor-edit" data-id="${id}" title="${t('tooltip.edit')}" aria-label="${t('tooltip.edit')}">${t_edit()}</button>
+              <button class="vendor-close" data-id="${id}" title="${t('tooltip.back_to_drawer')}" aria-label="${t('tooltip.back_to_drawer')}">${ICON_ARROW_LEFT}</button>
+            </span>
+          </span>
+          <span class="vendor-total-cases">${cases} ${t('unit.cases')}</span>
+          <span class="vendor-total-amount">$${amt}</span>
+        </summary>
+        <div class="vendor-panel-body" id="vpb-${id}">${mdHtml}</div>
+      </details>`;
+    }).join('');
+    // For each displayed vendor body, apply nested accordion + copy buttons.
+    displayVendors.forEach(v => {
+      const body = document.getElementById('vpb-' + v.id);
+      if (!body) return;
+      // Pass vendorName as skipTitle so the markdown's own "**Southern**"
+      // banner (which duplicates our outer sub-panel summary) is removed
+      // instead of re-wrapped into a second accordion layer.
+      wrapSectionsIntoAccordion(v.markdown || '', body,
+        v.vendorName || v.vendorId, 'v:' + v.id);
+      attachSectionCopyButtons(v.markdown || '', body);
+      translateAllBanners(body);
+      flagRetireeRows(body);
+      // New data-driven 6-col table path. On any parse/render error,
+      // fall back to the legacy DOM-post-process so the page stays
+      // usable -- never leave the user with a blank panel.
+      let usedNewTable = false;
+      try {
+        usedNewTable = installPOMainTable(body);
+      } catch (err) {
+        console.warn('[installPOMainTable] failed, falling back:', err);
+        usedNewTable = false;
+      }
+      if (!usedNewTable) {
+        extractInstockColumn(body);
+        flagRestockOverStockRows(body);
+      }
+      addCellTitlesForTruncation(body);
+    });
+    // Restore user-toggled open/closed state from the snapshot.
+    poBody.querySelectorAll('details[data-state-key]').forEach(d => {
+      const k = d.dataset.stateKey;
+      if (k in openStates) d.open = openStates[k];
+    });
+    setEmailEnabled(displayVendors.some(v => v.markdown && v.markdown.length > 50));
+  }
+
+  // Placeholder for an "Edit" glyph -- use a plain pencil-like char for now.
+  // When i18n lands this becomes t('btn.edit_icon') and can be swapped per-locale.
+  function t_edit() { return '\u270E'; }
+
+  // Event wiring
+  drawerToggleEl.addEventListener('click', () => {
+    drawerEl.classList.toggle('open');
+  });
+  function buildCopyText(entry) {
+    // Salesman-friendly short form: one product per line, "name x N cases".
+    // Skip rows whose cases is 0 (user deleted / no order).
+    const parsed = parsePOMarkdown(entry.markdown || '');
+    const lines = [`${entry.vendorName || entry.vendorId || 'Order'}:`];
+    for (const s of parsed.sections) {
+      for (const r of s.rows) {
+        const n = r.cases || 0;
+        if (n > 0) lines.push(`${r.product} x ${n}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  drawerListEl.addEventListener('click', async (e) => {
+    const copyBtn = e.target.closest('.drawer-item-copy');
+    if (copyBtn) {
+      e.stopPropagation();
+      const id = copyBtn.dataset.id;
+      const entry = _orderHistory.find(h => h.id === id);
+      if (!entry) return;
+      const text = buildCopyText(entry);
+      try {
+        await copyToClipboard(text);
+        copyBtn.innerHTML = ICON_CHECK;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = ICON_COPY;
+          copyBtn.classList.remove('copied');
+        }, 1500);
+      } catch (err) {
+        addMsg('复制失败: ' + (err?.message || err), 'sys');
+      }
+      return;
+    }
+    const delBtn = e.target.closest('.drawer-item-del');
+    if (delBtn) {
+      e.stopPropagation();
+      const id = delBtn.dataset.id;
+      _orderHistory = _orderHistory.filter(h => h.id !== id);
+      if (_viewingHistoryId === id) backToLive();
+      saveHistory();
+      renderHistory();
+      return;
+    }
+    const moveBtn = e.target.closest('.drawer-item-move');
+    if (moveBtn) {
+      e.stopPropagation();
+      movePreorderToPanel(moveBtn.dataset.id);
+      if (window.matchMedia('(max-width: 600px)').matches) {
+        drawerEl.classList.remove('open');
+      }
+      return;
+    }
+    const item = e.target.closest('.drawer-item');
+    if (item) {
+      movePreorderToPanel(item.dataset.id);
+      if (window.matchMedia('(max-width: 600px)').matches) {
+        drawerEl.classList.remove('open');
+      }
+    }
+  });
+  drawerClearEl.addEventListener('click', async () => {
+    if (!_orderHistory.length) return;
+    if (!confirm(`清空 ${_orderHistory.length} 条历史订单?`)) return;
+    _orderHistory = [];
+    if (_viewingHistoryId) backToLive();
+    saveHistory();
+    renderHistory();
+    // Root-cause fix: also delete the server-side preorder snapshot so
+    // it can't reappear on reload. Next scheduled pre-generation will
+    // repopulate naturally when conditions warrant.
+    try {
+      const r = await fetch('/api/admin/preorders', { method: 'DELETE' });
+      if (!r.ok) addMsg(`清空 preorders 失败: HTTP ${r.status}`, 'sys');
+    } catch (e) {
+      addMsg('清空 preorders 网络错误: ' + e.message, 'sys');
+    }
+  });
+
+  loadHistory();
+  loadPanel();
+  // Invariant: a storeId|vendorId pair lives in either the panel OR the
+  // history drawer, never both. Older bug runs may have written duplicates
+  // to localStorage; prune them now so the bad state self-heals on refresh.
+  (() => {
+    const panelKeys = new Set((_poPanel.vendors || [])
+      .map(v => `${v.storeId}|${v.vendorId}`));
+    const before = _orderHistory.length;
+    _orderHistory = _orderHistory.filter(e =>
+      !panelKeys.has(`${e.storeId}|${e.vendorId}`));
+    if (before !== _orderHistory.length) {
+      console.log('[startup-dedup] pruned %d history dup(s) against panel',
+        before - _orderHistory.length);
+      saveHistory();
+      renderHistory();
+    }
+  })();
+  renderPOPanel();
+  loadPreorders();
+  loadUpcomingHolidays();
+  // First i18n sweep after all static DOM is present.
+  applyI18n();
+
+  let _upcomingHolidays = [];
+  async function loadUpcomingHolidays() {
+    try {
+      const sid = storeSel.value || '';
+      // 7 business days reminder (skips weekends, lines up with vendor lead time).
+      const q = sid
+        ? `?business_days=7&store_id=${encodeURIComponent(sid)}`
+        : `?business_days=7`;
+      const r = await fetch('/api/holidays/upcoming' + q);
+      if (!r.ok) return;
+      const d = await r.json();
+      _upcomingHolidays = d.items || [];
+      renderHolidayBanner();
+    } catch (e) {
+      console.warn('loadUpcomingHolidays failed:', e);
+    }
+  }
+  function renderHolidayBanner() {
+    const el = document.getElementById('holidayBanner');
+    if (!el) return;
+    if (!_upcomingHolidays.length) { el.style.display = 'none'; return; }
+    const top = _upcomingHolidays[0];
+    const cls = top.is_today ? 'today' : (top.days_away <= 3 ? 'urgent' : '');
+    // Range events: "in progress" when today is inside the range,
+    // otherwise "starts in N days". Single-day entries unchanged.
+    let whenLabel;
+    if (top.is_range && top.is_today) {
+      whenLabel = currentLang === 'en' ? 'in progress' : '进行中';
+    } else if (top.is_today) {
+      whenLabel = t('holiday.today');
+    } else {
+      whenLabel = t('holiday.days_away').replace('{N}', top.days_away);
+    }
+    const demand = top.demand_multiplier
+      ? ' · ' + t('holiday.demand').replace('{X}', top.demand_multiplier)
+      : '';
+    el.className = 'holiday-banner' + (cls ? ' ' + cls : '');
+    el.textContent = `${top.name} (${whenLabel})${demand}`;
+    // Tooltip enumerates every upcoming entry with notes for context.
+    el.title = _upcomingHolidays.map(h => {
+      const range = h.is_range ? `${h.resolved_date} .. ${h.end_date_resolved || '?'}` : h.resolved_date;
+      const w = h.is_today
+        ? (h.is_range ? 'in progress' : 'today')
+        : `+${h.days_away}d`;
+      return `${h.name} (${w}, ${range})${h.notes ? ' -- ' + h.notes : ''}`;
+    }).join('\n');
+    el.style.display = '';
+  }
+
+  async function loadPreorders() {
+    try {
+      const resp = await fetch('/api/admin/preorders');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const items = data.items || [];
+      if (!items.length) return;
+      // Dedup against BOTH the archive (_orderHistory) and the active panel
+      // (_poPanel.vendors). Invariant: a single storeId|vendorId lives in
+      // exactly one place. Without the panel half, panel vendors get
+      // re-inserted from the server as "new" preorders on refresh.
+      const seen = new Set([
+        ..._orderHistory.map(e => `${e.storeId}|${e.vendorId}`),
+        ...((_poPanel && _poPanel.vendors) || []).map(v => `${v.storeId}|${v.vendorId}`)
+      ]);
+      for (const it of items) {
+        const key = `${it.store_id}|${it.vendor_id}`;
+        if (seen.has(key)) continue;
+        // Convention: any number from DB/API can be null. Coerce to
+        // sensible defaults at the boundary so downstream code (sort,
+        // display, total math) can assume numeric.
+        _orderHistory.push({
+          id: 'pre_' + it.store_id + '_' + it.vendor_id,
+          storeId: it.store_id, storeName: it.store_name,
+          vendorId: it.vendor_id, vendorName: it.vendor_name,
+          ts: it.ts || Date.now(),
+          markdown: it.markdown || '',
+          cases: it.cases || 0,
+          amount: it.amount || 0,
+          preGenerated: true,
+        });
+      }
+      _orderHistory.sort((a, b) => {
+        const sa = (a.storeName || '').localeCompare(b.storeName || '');
+        if (sa !== 0) return sa;
+        return (a.vendorName || '').localeCompare(b.vendorName || '');
+      });
+      saveHistory();
+      renderHistory();
+    } catch (e) {
+      console.warn('preorders load failed', e);
+    }
+  }
+
+  // ─── Time-appropriate greeting ───────────────────────────────────
+  (function greet() {
+    const USER_NAME = 'Stacy';
+    const h = new Date().getHours();
+    let emoji, en, zh;
+    if (h >= 5 && h < 12)       { emoji = '☀️'; en = 'Good morning';   zh = '早上好'; }
+    else if (h >= 12 && h < 18) { emoji = '🌤️'; en = 'Good afternoon'; zh = '下午好'; }
+    else if (h >= 18 && h < 22) { emoji = '🌙'; en = 'Good evening';   zh = '晚上好'; }
+    else                        { emoji = '🌌'; en = 'Working late';   zh = '夜深了'; }
+    const now = new Date();
+    const dayNamesZh = ['周日','周一','周二','周三','周四','周五','周六'];
+    const dayNamesEn = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const monthsEn   = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const dateStrZh  = `${now.getMonth()+1}月${now.getDate()}日 ${dayNamesZh[now.getDay()]}`;
+    const dateStrEn  = `${monthsEn[now.getMonth()]} ${now.getDate()}, ${dayNamesEn[now.getDay()]}`;
+    const greetEl = document.getElementById('greeting');
+    const render = () => {
+      if (currentLang === 'en') {
+        greetEl.innerHTML =
+          `<span class="emoji">${emoji}</span>Hello ${USER_NAME}, ${en}` +
+          `<span class="sub">${dateStrEn}</span>`;
+      } else {
+        greetEl.innerHTML =
+          `<span class="emoji">${emoji}</span>Hello ${USER_NAME}, ${en}, 辛苦了` +
+          `<span class="sub">${zh}・${dateStrZh}</span>`;
+      }
+    };
+    render();
+    // Re-render when language switches (langSel.change dispatches a custom
+    // 'lang-changed' event via setLang; wire it here instead of re-reading).
+    window.addEventListener('lang-changed', render);
+  })();
+
+  // ─── Cache status + refresh ──────────────────────────────────────
+  const refreshCacheBtn = document.getElementById('refreshCacheBtn');
+  const cacheAgeEl = document.getElementById('cacheAge');
+  // emailBtn + setEmailEnabled are declared earlier (near _poPanel) so
+  // startup's renderPOPanel can call setEmailEnabled without TDZ.
+  // Stub kept so existing callers don't crash after approve button removal.
+  const setApproveEnabled = (_on) => {};
+  setEmailEnabled(false);
+
+  emailBtn.addEventListener('click', async () => {
+    if (!poBuffer) return;
+    const vendorName = vendorSel.selectedOptions[0]?.text || '';
+    const storeName = storeSel.selectedOptions[0]?.text || '';
+    const raw = prompt(
+      `发送当前 PO 给 ${vendorName} 的邮箱?(多个用 , 或 ; 分隔)`,
+      ''
+    );
+    if (!raw) return;
+    // Client-side validation (tolerant of comma/semicolon lists)
+    const parts = raw.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 0) return;
+    const re = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    const bad = parts.filter(p => !re.test(p));
+    if (bad.length > 0) {
+      addMsg('⚠ 邮箱格式无效: ' + bad.join(', '), 'sys');
+      return;
+    }
+    const recipients = parts.join(';');
+    setEmailEnabled(false);
+    emailBtn.innerHTML = '<span class="btn-icon">✉</span> 发送中…';
+    try {
+      const resp = await fetch('/api/reorder/email', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          vendor_email: recipients,
+          markdown: poBuffer,
+          store_name: storeName,
+          vendor_name: vendorName,
+        }),
+      });
+      // Response may be JSON (normal path) or HTML (Cloudflare 5xx / timeout).
+      // Read raw body first so we can surface the real failure.
+      const bodyText = await resp.text();
+      let data;
+      try { data = JSON.parse(bodyText); }
+      catch {
+        const snippet = bodyText.replace(/\s+/g, ' ').slice(0, 120).trim();
+        throw new Error(`HTTP ${resp.status} (non-JSON): ${snippet || '(empty)'}`);
+      }
+      if (!resp.ok) {
+        throw new Error(data.detail || data.message || `HTTP ${resp.status}`);
+      }
+      const count = data.count ?? parts.length;
+      addMsg(`✉ 已发送给 ${count} 个地址: ${parts.join(', ')}`, 'sys');
+      emailBtn.innerHTML = '<span class="btn-icon">✉</span> ✓ 已发送';
+      setTimeout(() => {
+        emailBtn.innerHTML = '<span class="btn-icon">✉</span> 发送邮件';
+      }, 2000);
+    } catch (e) {
+      addMsg('✗ 发送失败: ' + e.message, 'sys');
+      emailBtn.innerHTML = '<span class="btn-icon">✉</span> 发送邮件';
+    } finally {
+      setEmailEnabled(true);
+    }
+  });
+
+  // ── PO editor wiring (editable rows + add + save to bucket) ──────
+  const editPoBtn = document.getElementById('editPoBtn');
+  const savePoBtn = document.getElementById('savePoBtn');
+  // _editingPO is declared earlier (near _poPanel) so renderPOPanel can
+  // read it without triggering the TDZ error at startup.
+
+  function parsePOMarkdown(md) {
+    // Tolerant parser for LLM-generated markdown PO.
+    // - Accepts `#`, `##`, or `###` as section headers (LLMs drift).
+    //   But we require at least one space after the hashes so the
+    //   document title (`# Empire Wines & Spirits`) is only treated as
+    //   a section if nothing better appears; first-level title is
+    //   allowed since sections still distinguish by presence of rows.
+    // - Allows leading whitespace before `|` on table rows.
+    // - Detects header vs data by "is cell 2 numeric" instead of
+    //   hardcoding English "Product" -- this auto-skips 产品/Cases/箱数.
+    // - Detects separator rows with optional alignment colons `:---:`.
+    const sections = [];
+    let current = null;
+    const ensureSection = () => {
+      if (!current) {
+        current = { title: 'Order', rows: [] };
+        sections.push(current);
+      }
+      return current;
+    };
+    for (const line of (md || '').split(/\r?\n/)) {
+      // Section headers -- three shapes observed in LLM output:
+      //   (a) ## / ### hashes (template shape)
+      //   (b) `**Vendor** · ...` bold banner (actual LLM shape)
+      //   We ignore lines that are pipe-table rows even if bold-looking.
+      const h1 = line.match(/^#{1,3}\s+(.+?)\s*$/);
+      const h2 = !/\|/.test(line) ? line.match(/^\*\*(.+?)\*\*/) : null;
+      if (h1 || h2) {
+        const title = (h1 ? h1[1] : h2[1]).trim();
+        if (/negative stock|⚠️|total/i.test(title)) { current = null; continue; }
+        current = { title, rows: [] };
+        sections.push(current);
+        continue;
+      }
+      const m = line.match(/^\s*\|(.+)\|\s*$/);
+      if (!m) continue;
+      const cells = m[1].split('|').map(c => c.trim());
+      if (cells.length < 2) continue;
+      if (/^:?-+:?$/.test(cells[0])) continue;   // separator
+      const firstCell = cells[0];
+      const secondCell = cells[1] || '';
+      // Skip header rows (multi-lang)
+      if (/^(product|产品|item|名称|商品)$/i.test(firstCell)) continue;
+      if (/^(cases?|箱数|qty|quantity|数量|amount|金额|notes?|备注)$/i.test(secondCell)) continue;
+      if (!firstCell) continue;
+      const n = parseInt(secondCell, 10);
+      const cases = isNaN(n) ? 0 : n;
+      // Auto-lazy create section if first table row appears before any
+      // explicit banner (defensive for malformed LLM output).
+      ensureSection();
+      // 4-col shape: Product | Cases | Amount | Notes
+      // 3-col shape: Product | Cases | Notes
+      const hasAmount = cells.length >= 4;
+      current.rows.push({
+        product: firstCell,
+        cases,
+        amount: hasAmount ? (cells[2] || '') : '',
+        notes:  hasAmount ? (cells[3] || '') : (cells[2] || ''),
+      });
+    }
+    try { console.log('[PO parser] md len=%d, sections=%o, first 200 chars=%o',
+                       (md || '').length,
+                       sections.map(s => ({ title: s.title, rows: s.rows.length })),
+                       (md || '').slice(0, 200));
+    } catch (_) {}
+    return { sections };
+  }
+
+  function serializePO(parsed) {
+    const kept = parsed.sections.filter(s => s.rows.length > 0);
+    let md = '', grand = 0;
+    for (const s of kept) {
+      // Emit bold banner + 4-col table to match live LLM format.
+      md += `**${s.title}**\n\n| Product | Cases | Amount | Notes |\n|---------|-------|--------|-------|\n`;
+      for (const r of s.rows) {
+        md += `| ${r.product} | ${r.cases || 0} | ${r.amount || ''} | ${r.notes || ''} |\n`;
+        grand += r.cases || 0;
+      }
+      md += '\n';
+    }
+    md += `**Total: ${grand} cases**\n`;
+    return md;
+  }
+
+  function computeTotalCases(parsed) {
+    let total = 0;
+    const breakdown = [];
+    for (const s of parsed.sections) {
+      const sum = s.rows.reduce((t, r) => t + (r.cases || 0), 0);
+      total += sum;
+      breakdown.push({
+        title: s.title, rows: s.rows.length, sum,
+        items: s.rows.map(r => `${r.product}:${r.cases}`),
+      });
+    }
+    try { console.log('[PO total] %d = %o', total, breakdown); } catch (_) {}
+    return total;
+  }
+
+  function renderPOEditor(parsed) {
+    const sectionsHTML = parsed.sections.map((s, si) => {
+      // "建议退役" / retire / discontinued sections default collapsed --
+      // user-facing insight, not part of the active order.
+      const isRetire = /建议退役|retire|discontinu/i.test(s.title);
+      const openAttr = isRetire ? '' : ' open';
+      // Editor mirrors view-mode 5-col: PRODUCT | STOCK | CASE | AMOUNT | NOTES.
+      // Stock source: POS cache (_products) keyed by product name; fallback
+      // to parsing "库存 N" out of notes. Only CASE is editable.
+      const _stockByName = new Map();
+      for (const p of (_products || [])) {
+        if (p && p.name && p.qty_on_hand != null) {
+          _stockByName.set(p.name.toLowerCase(), Number(p.qty_on_hand));
+        }
+      }
+      const rowsHTML = s.rows.map((r, ri) => {
+        const pname = (r.product || '').toLowerCase();
+        let stock = _stockByName.get(pname);
+        if (stock == null) {
+          const textNotes = (r.notes || '').replace(/<[^>]*>/g, '');
+          const m = textNotes.match(/(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i);
+          stock = m ? m[1] : '';
+        }
+        const notesOut = (r.notes || '')
+          .replace(/\s*[·・]\s*(?:库存|在库|现库|stock|instock)\s*[:：]?\s*-?\d+/gi, '')
+          .replace(/(?:库存|在库|现库|stock|instock)\s*[:：]?\s*-?\d+\s*[·・]\s*/gi, '')
+          .replace(/(?:库存|在库|现库|stock|instock)\s*[:：]?\s*-?\d+/gi, '')
+          .replace(/^\s*[·・]\s*|\s*[·・]\s*$/g, '')
+          .trim();
+        return `
+        <tr data-si="${si}" data-ri="${ri}">
+          <td class="col-product"><button class="del-btn" title="删除" aria-label="删除">${ICON_TRASH}</button><span class="prod-name">${escapeHtml(r.product)}</span></td>
+          <td class="col-stock">${escapeHtml(String(stock))}</td>
+          <td class="col-qty"><input type="text" inputmode="numeric" pattern="[0-9]*" class="qty-input" value="${r.cases || 0}"></td>
+          <td class="col-amt">${escapeHtml(r.amount || '')}</td>
+          <td class="col-notes">${notesOut}</td>
+        </tr>`;
+      }).join('');
+      const sCases = s.rows.reduce((t, r) => t + (r.cases || 0), 0);
+      const sAmt = s.rows.reduce((t, r) => t + parseAmountNumber(r.amount), 0);
+      const amtTxt = sAmt.toLocaleString(undefined, {maximumFractionDigits: 0});
+      return `<details class="po-section"${openAttr}>
+        <summary class="po-section-title">${escapeHtml(translateSectionTitle(s.title))}
+          <span class="po-section-count">${s.rows.length} &middot; ${sCases} ${t('unit.cases')} &middot; $${amtTxt}</span>
+          <button class="po-section-copy" data-si="${si}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
+        </summary>
+        <table>
+          <thead><tr><th>${t('col.product')}</th><th>${t('col.stock')}</th><th>${t('col.cases')}</th><th>${t('col.amount')}</th><th>${t('col.notes')}</th></tr></thead>
+          <tbody data-si="${si}">${rowsHTML || `<tr><td colspan="5" style="color:var(--muted);font-style:italic;padding:6px 8px;">${t('section.empty')}</td></tr>`}</tbody>
+        </table>
+      </details>`;
+    }).join('');
+    poBody.innerHTML = `<div class="po-editor">
+      <div class="po-editor-toolbar">
+        <button class="po-add-btn" id="poAddBtn">${t('btn.add_product')}</button>
+        <span class="po-editor-spacer"></span>
+        <button class="btn btn-ghost" id="poEditorCancelBtn">${t('btn.cancel')}</button>
+        <button class="btn btn-primary" id="poEditorSaveBtn">${t('btn.save')}</button>
+      </div>
+      <div id="poSections">${sectionsHTML}</div>
+    </div>`;
+    // In-editor Save + Cancel. Save reuses the existing savePoBtn handler
+    // (programmatic click) so there is a single source of truth for the
+    // save logic. Cancel discards in-memory edits and re-renders view.
+    document.getElementById('poEditorSaveBtn')?.addEventListener('click', () => {
+      savePoBtn.click();
+    });
+    document.getElementById('poEditorCancelBtn')?.addEventListener('click', () => {
+      _editingPO = null;
+      renderPOPanel();
+      setEmailEnabled(_poPanel.vendors.some(v => v.markdown && v.markdown.length > 50));
+    });
+    // iPhone / iPad: backspace is the only delete key. Force cursor to the
+    // end of the number on focus AND on click so one backspace tap removes
+    // the trailing digit. Using type=text + inputmode=numeric allows
+    // setSelectionRange (type=number forbids it on iOS Safari).
+    poBody.querySelectorAll('input.qty-input').forEach(inp => {
+      const toEnd = (e) => {
+        const v = e.target.value || '';
+        try { e.target.setSelectionRange(v.length, v.length); } catch (_) {}
+      };
+      inp.addEventListener('focus', toEnd);
+      inp.addEventListener('click', toEnd);
+    });
+  }
+
+  function enterPOEditor() {
+    let md = '', targetId = 'live';
+    if (_viewingHistoryId) {
+      const e = _orderHistory.find(x => x.id === _viewingHistoryId);
+      if (!e) return;
+      md = e.markdown;
+      targetId = _viewingHistoryId;
+    } else if (poBuffer) {
+      md = poBuffer;
+    }
+    console.log('[edit] entering editor, targetId=%s md source len=%d',
+                targetId, (md || '').length);
+    const parsed = parsePOMarkdown(md);
+    // Only seed a default section when the PO is completely empty (D-rule:
+    // allow empty-start editing). If any real section was parsed, use as-is.
+    if (parsed.sections.length === 0) {
+      parsed.sections.push({ title: 'Standard reorder', rows: [] });
+    }
+    _editingPO = { parsed, targetId };
+    renderPOEditor(parsed);
+    // Legacy top-level edit/save buttons stay hidden; save flow lives inside
+    // the editor's own toolbar now (per-vendor entry point, in-editor exit).
+    setEmailEnabled(false);
+  }
+
+  function exitPOEditor(md) {
+    _editingPO = null;
+    renderPOPanel();
+  }
+
+  savePoBtn.addEventListener('click', () => {
+    if (!_editingPO) return;
+    const md = serializePO(_editingPO.parsed);
+    const totals = parseTotals(md);
+    // Phase-1: editor targets a vendor entry in _poPanel.vendors.
+    // targetId is the vendor entry id. Update in place, stay in panel.
+    const idx = _poPanel.vendors.findIndex(v => v.id === _editingPO.targetId);
+    if (idx >= 0) {
+      _poPanel.vendors[idx] = {
+        ..._poPanel.vendors[idx],
+        markdown: md,
+        cases: totals.cases,
+        amount: totals.amount,
+        ts: Date.now(),
+      };
+      savePanel();
+    } else {
+      // Fallback: editor was opened outside a panel entry -- upsert by
+      // current store/vendor select.
+      const sid = storeSel.value, vid = vendorSel.value;
+      upsertPanelVendor({
+        id: 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+        storeId: sid,
+        storeName: storeSel.selectedOptions[0]?.text || sid,
+        vendorId: vid,
+        vendorName: vendorSel.selectedOptions[0]?.text || vid,
+        ts: Date.now(), markdown: md,
+        cases: totals.cases, amount: totals.amount,
+      });
+    }
+    addMsg(t('msg.saved'), 'sys');
+    exitPOEditor(md);
+  });
+
+  // Delegated events inside the editor table
+  poBody.addEventListener('input', (e) => {
+    if (!_editingPO) return;
+    if (!e.target.classList.contains('qty-input')) return;
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    const si = +tr.dataset.si, ri = +tr.dataset.ri;
+    const row = _editingPO.parsed.sections[si]?.rows[ri];
+    if (!row) return;
+    row.cases = Math.max(0, parseInt(e.target.value, 10) || 0);
+  });
+
+  poBody.addEventListener('click', async (e) => {
+    // Multi-vendor panel -- vendor-level controls.
+    const vendorClose = e.target.closest('.vendor-close');
+    if (vendorClose) {
+      e.preventDefault(); e.stopPropagation();
+      returnVendorToDrawer(vendorClose.dataset.id);
+      return;
+    }
+    const vendorCopyBtn = e.target.closest('.vendor-copy');
+    if (vendorCopyBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const v = _poPanel.vendors.find(x => x.id === vendorCopyBtn.dataset.id);
+      if (!v) return;
+      try {
+        await copyToClipboard(buildCopyText(v));
+        vendorCopyBtn.innerHTML = ICON_CHECK;
+        vendorCopyBtn.classList.add('copied');
+        setTimeout(() => {
+          vendorCopyBtn.innerHTML = ICON_COPY;
+          vendorCopyBtn.classList.remove('copied');
+        }, 1500);
+      } catch (err) { addMsg('复制失败: ' + (err?.message || err), 'sys'); }
+      return;
+    }
+    const vendorEditBtn = e.target.closest('.vendor-edit');
+    if (vendorEditBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const v = _poPanel.vendors.find(x => x.id === vendorEditBtn.dataset.id);
+      if (!v) return;
+      // Enter editor with this vendor's markdown as source.
+      const parsed = parsePOMarkdown(v.markdown || '');
+      if (parsed.sections.length === 0) parsed.sections.push({ title: 'Standard reorder', rows: [] });
+      _editingPO = { parsed, targetId: v.id, vendorEntry: v };
+      renderPOEditor(parsed);
+      setEmailEnabled(false);
+      return;
+    }
+    // Read-only view mode: section copy attached to markdown banners.
+    const viewCopy = e.target.closest('.po-view-copy');
+    if (viewCopy) {
+      e.preventDefault(); e.stopPropagation();
+      const sourceMd = _viewingHistoryId
+        ? (_orderHistory.find(h => h.id === _viewingHistoryId)?.markdown || '')
+        : (poBuffer || '');
+      const parsed = parsePOMarkdown(sourceMd);
+      const si = +viewCopy.dataset.si;
+      const s = parsed.sections[si];
+      if (!s) return;
+      const lines = [`${s.title}:`];
+      for (const r of s.rows) {
+        const n = r.cases || 0;
+        if (n > 0) lines.push(`${r.product} x ${n}`);
+      }
+      const text = lines.join('\n');
+      try {
+        await copyToClipboard(text);
+        viewCopy.innerHTML = ICON_CHECK;
+        viewCopy.classList.add('copied');
+        setTimeout(() => {
+          viewCopy.innerHTML = ICON_COPY;
+          viewCopy.classList.remove('copied');
+        }, 1500);
+      } catch (err) {
+        addMsg('复制失败: ' + (err?.message || err), 'sys');
+      }
+      return;
+    }
+    if (!_editingPO) return;
+    const secCopy = e.target.closest('.po-section-copy');
+    if (secCopy) {
+      // prevent the click from toggling <details>
+      e.preventDefault();
+      e.stopPropagation();
+      const si = +secCopy.dataset.si;
+      const s = _editingPO.parsed.sections[si];
+      if (!s) return;
+      const lines = [`${s.title}:`];
+      for (const r of s.rows) {
+        const n = r.cases || 0;
+        if (n > 0) lines.push(`${r.product} x ${n}`);
+      }
+      const text = lines.join('\n');
+      try {
+        await copyToClipboard(text);
+        secCopy.innerHTML = ICON_CHECK;
+        secCopy.classList.add('copied');
+        setTimeout(() => {
+          secCopy.innerHTML = ICON_COPY;
+          secCopy.classList.remove('copied');
+        }, 1500);
+      } catch (err) {
+        addMsg('复制失败: ' + (err?.message || err), 'sys');
+      }
+      return;
+    }
+    const del = e.target.closest('.del-btn');
+    if (del) {
+      const tr = del.closest('tr');
+      if (!tr) return;
+      const si = +tr.dataset.si, ri = +tr.dataset.ri;
+      _editingPO.parsed.sections[si]?.rows.splice(ri, 1);
+      renderPOEditor(_editingPO.parsed);
+      return;
+    }
+    if (e.target.id === 'poAddBtn') {
+      openAddRowInline();
+      return;
+    }
+  });
+
+  function openAddRowInline() {
+    const existing = document.querySelector('.add-row-inline');
+    if (existing) { existing.remove(); return; }
+    const div = document.createElement('div');
+    div.className = 'add-row-inline';
+    div.innerHTML = `<input type="text" placeholder="${currentLang === 'en' ? 'Type product name (>= 2 chars)...' : '输入产品名 (>= 2 字符)...'}" id="poAddInput">
+      <div class="add-row-actions">
+        <button type="button" class="btn btn-primary" id="poAddCommitBtn" disabled>
+          ${currentLang === 'en' ? 'Add' : '添加'} <span id="poAddCount">0</span>
+        </button>
+        <button type="button" class="btn btn-ghost" id="poAddCloseBtn">
+          ${currentLang === 'en' ? 'Close' : '关闭'}
+        </button>
+      </div>
+      <div id="poAddAc" class="autocomplete"></div>`;
+    document.getElementById('poAddBtn').after(div);
+    const inp = document.getElementById('poAddInput');
+    const acBox = document.getElementById('poAddAc');
+    const commitBtn = document.getElementById('poAddCommitBtn');
+    const countEl = document.getElementById('poAddCount');
+    const closeBtn = document.getElementById('poAddCloseBtn');
+    inp.focus();
+
+    // Selected set of product names (from _products). Preserved across
+    // re-filters so user can query, check, query again, check more, commit.
+    const selected = new Map();  // name -> product object
+    const refreshCommit = () => {
+      countEl.textContent = String(selected.size);
+      commitBtn.disabled = selected.size === 0;
+    };
+
+    function renderMatches() {
+      const q = inp.value.trim().toLowerCase();
+      if (q.length < 2) { acBox.classList.remove('active'); return; }
+      const matches = (_products || []).filter(p => p.name.toLowerCase().includes(q)).slice(0, 20);
+      if (matches.length === 0) { acBox.classList.remove('active'); return; }
+      acBox.innerHTML = matches.map((p, i) => {
+        const checked = selected.has(p.name) ? 'checked' : '';
+        const cost  = (p.cost         != null) ? `$${Number(p.cost).toFixed(2)}` : '';
+        const price = (p.price        != null) ? `$${Number(p.price).toFixed(2)}` : '';
+        const stk   = (p.qty_on_hand  != null) ? `${Number(p.qty_on_hand)}` : '';
+        return `<label class="autocomplete-item ac-picker" data-idx="${i}">
+          <input type="checkbox" class="ac-check" ${checked}>
+          <span class="ac-name">${escapeHtml(p.name)}</span>
+          <span class="ac-stock" title="in stock (btl)">${stk}</span>
+          <span class="ac-cost"  title="cost / btl">${cost}</span>
+          <span class="ac-price" title="price / btl">${price}</span>
+        </label>`;
+      }).join('');
+      acBox.classList.add('active');
+      acBox._matches = matches;
+    }
+    inp.addEventListener('input', renderMatches);
+
+    acBox.addEventListener('change', (e) => {
+      const cb = e.target.closest('.ac-check');
+      if (!cb || !acBox._matches) return;
+      const item = cb.closest('.autocomplete-item');
+      const p = acBox._matches[+item.dataset.idx];
+      if (cb.checked) selected.set(p.name, p);
+      else selected.delete(p.name);
+      refreshCommit();
+    });
+
+    commitBtn.addEventListener('click', () => {
+      if (selected.size === 0) return;
+      const standard = _editingPO.parsed.sections.find(s => /standard|正常|reorder/i.test(s.title))
+                    || _editingPO.parsed.sections[0];
+      // Batch add all selected products. Compute amount = cases * qty_per_case * cost
+      // (cost is per-bottle) so the row shows a populated $ figure immediately.
+      for (const p of selected.values()) {
+        const cases = 1;
+        let amountStr = '';
+        if (p.cost != null && p.qty_per_case != null) {
+          const amt = cases * Number(p.qty_per_case) * Number(p.cost);
+          amountStr = '$' + amt.toFixed(2);
+        }
+        standard.rows.push({
+          product: p.name, cases, amount: amountStr,
+          notes: currentLang === 'en' ? 'manual add' : '手动添加',
+        });
+      }
+      renderPOEditor(_editingPO.parsed);
+    });
+    closeBtn.addEventListener('click', () => {
+      div.remove();
+    });
+  }
+
+  const CLOCK_SVG = `<span class="clock-spin" aria-hidden="true"><span class="hand hand-min"></span><span class="hand hand-sec"></span></span>`;
+
+  let cacheTextEl = null;
+  function ensureCacheClock() {
+    if (cacheTextEl && cacheAgeEl.contains(cacheTextEl)) return;
+    cacheAgeEl.innerHTML = `<span class="cache-text"></span>${CLOCK_SVG}`;
+    cacheTextEl = cacheAgeEl.querySelector('.cache-text');
+  }
+  function resetCacheClock() {
+    cacheTextEl = null;
+    ensureCacheClock();
+    updateCacheAge();
+  }
+  function setCacheBusy(text) {
+    ensureCacheClock();
+    cacheTextEl.textContent = text;
+    cacheAgeEl.style.color = 'var(--muted)';
+  }
+  function setCacheDone(text) {
+    cacheAgeEl.innerHTML = `<span>${text}</span><span class="cache-check">✓</span>`;
+    cacheTextEl = null;
+    cacheAgeEl.style.color = 'var(--muted)';
+  }
+
+  async function updateCacheAge() {
+    const sid = storeSel.value;
+    if (!sid) { cacheAgeEl.textContent = ''; return; }
+    try {
+      const resp = await fetch('/api/admin/cache/stats');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const info = data.stores?.[sid];
+      if (!info) {
+        cacheAgeEl.textContent = currentLang === 'en' ? 'no data' : '数据未加载';
+        return;
+      }
+      const age = info.age_seconds;
+      const mins = Math.floor(age / 60), secs = Math.floor(age % 60);
+      const ageText = age < 60 ? `${secs}s` : `${mins}m${secs}s`;
+      ensureCacheClock();
+      cacheTextEl.textContent = currentLang === 'en'
+        ? `cached ${ageText} ago`
+        : `缓存 ${ageText} 前`;
+      cacheAgeEl.style.color = info.warn ? 'var(--danger)' : 'var(--muted)';
+    } catch {}
+  }
+  // Re-render cache text on language switch so en/zh labels stay in sync.
+  window.addEventListener('lang-changed', () => updateCacheAge());
+
+  // Smart refresh threshold — 6 hours.  Within window → fusion patch (on_hand
+  // + recent sales).  Beyond → full reload.  Shift/Alt click forces full.
+  const SMART_REFRESH_WINDOW_SEC = 6 * 3600;
+
+  async function doRefresh(sid, mode) {
+    const url = mode === 'smart'
+      ? `/api/admin/cache/smart-refresh/${encodeURIComponent(sid)}`
+      : `/api/admin/cache/refresh/${encodeURIComponent(sid)}`;
+    const resp = await fetch(url, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    return data;
+  }
+
+  refreshCacheBtn.addEventListener('click', async (event) => {
+    const sid = storeSel.value;
+    if (!sid) { addMsg('⚠ 请先选门店', 'sys'); return; }
+
+    // Decide mode
+    const forceFull = event.shiftKey || event.altKey;
+    let mode = 'full';
+    if (!forceFull) {
+      try {
+        const stats = await fetch('/api/admin/cache/stats').then(r => r.json());
+        const info = stats.stores?.[sid];
+        if (info && info.age_seconds < SMART_REFRESH_WINDOW_SEC) {
+          mode = 'smart';
+        }
+      } catch { /* fall through to full */ }
+    }
+
+    refreshCacheBtn.disabled = true;
+    refreshCacheBtn.innerHTML = `<span class="btn-icon">🔄</span> ${mode === 'smart' ? '快刷中…' : '全刷中…'}`;
+    setCacheBusy(mode === 'smart' ? '快刷中' : '全刷中');
+    // ANY refresh (smart or full) drops the per-store product-name caches
+    // in localStorage so autocomplete reflects the latest inStock values.
+    _clearAllProductNameCaches();
+    try {
+      let data;
+      try {
+        data = await doRefresh(sid, mode);
+      } catch (e) {
+        // Smart failed? Auto-fallback to full.
+        if (mode === 'smart') {
+          addMsg('⚠ 快刷失败,降级全刷…', 'sys');
+          setCacheBusy('全刷中');
+          data = await doRefresh(sid, 'full');
+        } else {
+          throw e;
+        }
+      }
+      const ms = Math.round(data.load_duration_ms);
+      const label = data.mode === 'smart' ? '⚡ 快刷' : '🔄 全刷';
+      addMsg(`${label} 完成 (${data.snapshot_rows} SKU, ${ms}ms)`, 'sys');
+      setCacheDone(`${label} 完成`);
+      setTimeout(updateCacheAge, 1500);
+      // Immediately re-fetch the autocomplete catalog so the popup shows
+      // the just-refreshed inStock values without waiting for a store switch.
+      loadAllProductNames(sid);
+    } catch (e) {
+      addMsg('✗ 刷新失败: ' + e.message, 'sys');
+      updateCacheAge();
+    } finally {
+      refreshCacheBtn.disabled = false;
+      refreshCacheBtn.innerHTML = '<span class="btn-icon">🔄</span> 刷新';
+    }
+  });
+  refreshCacheBtn.title = '刷新数据(6h 内智能快刷 / Shift+点击强制全刷)';
+
+  // Removed 10s auto-poll — cache age now updates only on store change,
+  // after manual refresh, or after a generation completes.
+
+  // localStorage cache for product names (per-store, TTL 24h). POS SQL
+  // Express is too slow to hit on every store switch and most catalogs
+  // change very little day-to-day. Force-refresh via Shift+click on the
+  // refresh button (clears all cached entries; see _clearAllProductNameCaches).
+  const PRODUCT_CACHE_KEY_PREFIX = 'eip_product_names_v1_';
+  const PRODUCT_CACHE_TTL_S = 24 * 3600;
+  function _productCacheKey(storeId) { return PRODUCT_CACHE_KEY_PREFIX + storeId; }
+
+  async function loadAllProductNames(storeId) {
+    if (!storeId) return;
+    const key = _productCacheKey(storeId);
+    // Try localStorage first
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        const ageS = (Date.now() - (cached.ts || 0)) / 1000;
+        // Schema check: newer response shape carries cost / price / qty_per_case
+        // / reorder_level. Reject older cached items that predate these fields
+        // so users don't get a stuck zero-cost autocomplete after a deploy.
+        const first = Array.isArray(cached.items) ? cached.items[0] : null;
+        const schemaOk = first && (
+          'cost' in first && 'price' in first &&
+          'qty_per_case' in first && 'reorder_level' in first
+        );
+        if (schemaOk && ageS < PRODUCT_CACHE_TTL_S) {
+          _products = cached.items.filter(p => p && p.name && p.name.length >= 3);
+          console.log('[autocomplete] localStorage cache hit: %d items, age=%ds',
+            _products.length, Math.round(ageS));
+          return;
+        }
+        if (!schemaOk) {
+          console.log('[autocomplete] localStorage cache has old schema, refetching');
+        }
+      }
+    } catch (_e) { /* corrupt or quota -- fall through to fetch */ }
+    // Cache miss / stale -> block input during slow POS SQL fetch
+    const prevPlaceholder = msgInput.placeholder;
+    msgInput.disabled = true;
+    msgInput.placeholder = currentLang === 'en'
+      ? 'Loading products, please wait...'
+      : '正在加载产品,请稍候...';
+    try {
+      const resp = await fetch(`/api/stores/${encodeURIComponent(storeId)}/product-names`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const items = await resp.json();
+      _products = items.filter(p => p && p.name && p.name.length >= 3);
+      console.log('[autocomplete] fetched + cached:', _products.length);
+      try { localStorage.setItem(key, JSON.stringify({ts: Date.now(), items})); }
+      catch (_e) { /* quota exceeded -- still in memory, just not persisted */ }
+    } catch (e) {
+      console.warn('[autocomplete] failed to load store catalog:', e);
+    } finally {
+      msgInput.disabled = false;
+      msgInput.placeholder = prevPlaceholder;
+    }
+  }
+  function _clearAllProductNameCaches() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(PRODUCT_CACHE_KEY_PREFIX)) keys.push(k);
+      }
+      keys.forEach(k => localStorage.removeItem(k));
+    } catch (_e) {}
+  }
+
+  storeSel.addEventListener('change', () => {
+    sessionId = null;
+    sendBtn.disabled = true;
+    if (storeSel.value) {
+      loadVendors(storeSel.value);
+      loadAllProductNames(storeSel.value);   // populate autocomplete now
+      updateCacheAge();
+    } else {
+      vendorSel.innerHTML = '<option>先选门店</option>';
+      vendorSel.disabled = true;
+      cacheAgeEl.textContent = '';
+    }
+    // Panel is store-scoped: show only current store's vendors.
+    renderPOPanel();
+    // Some events are store-scoped (applicable_stores); reload banner.
+    loadUpcomingHolidays();
+  });
+
+  vendorSel.addEventListener('change', () => {
+    sessionId = null;
+    if (vendorSel.value && storeSel.value) generatePO();
+  });
+
+  sendBtn.addEventListener('click', sendEdit);
+  cancelBtn.addEventListener('click', () => { cancelSSE(); });
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendEdit(); }
+  });
+
+  // ── API connection probe (heartbeat-style) ───────────────────────
+  // Periodically fetch /health. Success -> online -> enable store/vendor
+  // dropdowns. Network error / timeout -> offline -> disable them so
+  // the user can't attempt actions that require the server. 401 is NOT
+  // offline (server reachable, auth expired) -- auth gate handles that.
+  const apiStatusDot = document.getElementById('apiStatus');
+  let _apiOnline = null;            // tri-state: null/true/false
+  let _apiProbeTimer = null;
+  const _PROBE_ON_INTERVAL  = 120 * 1000;  // 2 min when online (light)
+  const _PROBE_OFF_INTERVAL = 30 * 1000;   // 30s when offline (eager reconnect)
+
+  function _applyApiOnlineState(online) {
+    if (_apiOnline === online) return;     // no-op on unchanged
+    _apiOnline = online;
+    if (apiStatusDot) {
+      apiStatusDot.classList.remove('online', 'offline', 'checking');
+      apiStatusDot.classList.add(online ? 'online' : 'offline');
+      apiStatusDot.title = online
+        ? 'Server online'
+        : 'Server offline -- generate / refresh / email disabled';
+    }
+    // Store dropdown: disabled when offline (vendor auto-follows via
+    // existing storeSel change handler). sendBtn / cancelBtn / email /
+    // refresh button state still governed by their own flows; only the
+    // dropdown gate is added here per spec.
+    if (storeSel)  storeSel.disabled  = !online;
+    if (vendorSel && !online) vendorSel.disabled = true;
+    // When coming back online, don't force-enable vendorSel -- it stays
+    // disabled until a store is selected (its original logic).
+  }
+
+  async function _probeApi() {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 2500);
+      const r = await fetch('/health', {
+        method: 'GET',
+        credentials: 'same-origin',
+        signal: ctl.signal,
+      });
+      clearTimeout(t);
+      // Any HTTP response (even 5xx) means server is reachable.
+      _applyApiOnlineState(r.ok || r.status < 500);
+    } catch (_e) {
+      _applyApiOnlineState(false);
+    } finally {
+      // Reschedule based on new state.
+      if (_apiProbeTimer) clearTimeout(_apiProbeTimer);
+      _apiProbeTimer = setTimeout(_probeApi,
+        _apiOnline ? _PROBE_ON_INTERVAL : _PROBE_OFF_INTERVAL);
+    }
+  }
+  // Browser hints: react instantly to OS-level network changes.
+  window.addEventListener('online',  _probeApi);
+  window.addEventListener('offline', () => _applyApiOnlineState(false));
+
+  // ── Auth gate: check session, show login overlay on 401, start app on 200.
+  // If server reports auth_enabled=false, skip entirely (local / SaaS-off
+  // deployments stay open).
+  const _loginOverlay = document.getElementById('loginOverlay');
+  const _loginForm    = document.getElementById('loginForm');
+  const _loginUser    = document.getElementById('loginUser');
+  const _loginPass    = document.getElementById('loginPass');
+  const _loginError   = document.getElementById('loginError');
+  const _appEl        = document.getElementById('app');
+
+  function _showLogin(msg) {
+    _loginOverlay.style.display = 'flex';
+    _appEl.style.display = 'none';
+    if (msg) { _loginError.textContent = msg; _loginError.style.display = ''; }
+    else { _loginError.style.display = 'none'; }
+    setTimeout(() => _loginUser.focus(), 50);
+  }
+  function _hideLogin() {
+    _loginOverlay.style.display = 'none';
+    _appEl.style.display = '';
+  }
+  async function _startApp() {
+    _hideLogin();
+    loadStores();
+    _probeApi();  // start heartbeat-style server liveness checks
+  }
+  async function _checkAuthAndStart() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+      if (r.ok) {
+        const d = await r.json();
+        if (!d.auth_enabled || d.user) { _startApp(); return; }
+      }
+    } catch (e) { /* network hiccup -- show login */ }
+    _showLogin();
+  }
+  const _loginRemember = document.getElementById('loginRemember');
+  _loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    _loginError.style.display = 'none';
+    const btn = _loginForm.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: _loginUser.value.trim(),
+          password: _loginPass.value,
+          remember: !!_loginRemember.checked,
+        }),
+      });
+      if (r.ok) {
+        _loginPass.value = '';
+        _startApp();
+        return;
+      }
+      const err = await r.json().catch(() => ({}));
+      _loginError.textContent = err.detail || ('Login failed (' + r.status + ')');
+      _loginError.style.display = '';
+    } catch (err) {
+      _loginError.textContent = 'Network error: ' + err.message;
+      _loginError.style.display = '';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  _checkAuthAndStart();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PO 草稿审核 · Admin</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<style>
+  :root {
+    --bg: #1a1a1a; --panel: #242424; --panel2: #2e2e2e;
+    --text: #e8e8e8; --muted: #888; --border: #3a3a3a;
+    --accent: #4a9eff; --success: #2ecc71; --danger: #e74c3c; --warn: #f39c12;
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 13px/1.5 -apple-system, "Segoe UI", sans-serif; height: 100%; }
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 10px 20px; display: flex; align-items: center; gap: 16px;
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .muted { color: var(--muted); font-size: 11px; }
+  header .spacer { flex: 1; }
+  header select, header button, header input {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    padding: 5px 10px; border-radius: 4px; font: inherit;
+  }
+  header button { cursor: pointer; }
+  header button:hover { border-color: var(--accent); }
+
+  main {
+    display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 44px);
+  }
+  .list {
+    background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+  .list-item {
+    padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .list-item:hover { background: var(--panel2); }
+  .list-item.active { background: rgba(74,158,255,0.1); border-left: 3px solid var(--accent); padding-left: 11px; }
+  .list-item .row1 { display: flex; justify-content: space-between; gap: 8px; }
+  .list-item .vendor { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-item .amt { color: var(--accent); font-weight: 600; }
+  .list-item .meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px;
+    font-weight: 600; text-transform: uppercase;
+  }
+  .badge.pending   { background: #555; color: #fff; }
+  .badge.approved  { background: var(--warn); color: #fff; }
+  .badge.committed { background: var(--success); color: #fff; }
+  .badge.rejected  { background: var(--danger); color: #fff; }
+  .badge.source    { background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
+
+  .detail {
+    padding: 20px 28px; overflow-y: auto;
+  }
+  .detail h2 { margin: 0 0 4px; font-size: 18px; }
+  .detail .hdr-meta { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .detail .actions { display: flex; gap: 8px; margin: 12px 0 16px; }
+  .btn {
+    padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: 600;
+    font-size: 12px; border: 1px solid var(--border); background: var(--panel2);
+    color: var(--text);
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-approve { background: var(--warn); border-color: var(--warn); color: #fff; }
+  .btn-reject  { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn-commit  { background: var(--success); border-color: var(--success); color: #fff; }
+
+  .section {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 16px;
+  }
+  .section h3 {
+    margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 600; display: flex; justify-content: space-between;
+  }
+  .section .body { padding: 12px 14px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--panel2); font-weight: 600; color: var(--muted); }
+  td input {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    padding: 3px 5px; border-radius: 3px; font: inherit;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.narrow { width: 80px; }
+
+  pre.sql {
+    background: var(--bg); padding: 10px 12px; border-radius: 4px; border: 1px solid var(--border);
+    font: 11px/1.5 "JetBrains Mono", Consolas, monospace;
+    overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+    color: #d4d4d4;
+  }
+  pre.sql .kw { color: #569cd6; }
+  pre.sql .str { color: #ce9178; }
+  pre.sql .num { color: #b5cea8; }
+
+  .audit { font-size: 11px; font-family: "JetBrains Mono", Consolas, monospace; }
+  .audit-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .audit-row .ts { color: var(--muted); }
+  .audit-row .action { font-weight: 600; color: var(--accent); }
+
+  .errors { background: rgba(231,76,60,0.1); border: 1px solid var(--danger);
+            color: var(--danger); padding: 8px 12px; border-radius: 4px;
+            margin-bottom: 12px; font-size: 12px; }
+  .confidence-low td { background: rgba(243,156,18,0.1); }
+
+  .empty { color: var(--muted); text-align: center; padding: 40px 20px; font-style: italic; }
+
+  /* Live-status pill shown in header */
+  #wsStatus {
+    font-size: 11px; padding: 3px 8px; border-radius: 10px;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--border);
+  }
+  #wsStatus.live   { color: var(--success); border-color: var(--success); }
+  #wsStatus.down   { color: var(--danger);  border-color: var(--danger); }
+  #wsStatus.commit { color: var(--warn);    border-color: var(--warn); }
+
+  /* Upload-OCR modal */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-back.on { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px; min-width: 420px; max-width: 560px;
+  }
+  .modal h3 { margin: 0 0 12px; font-size: 14px; }
+  .modal .field { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .modal label { color: var(--muted); font-size: 11px; }
+  .modal select, .modal input[type=file], .modal input[type=text] {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    padding: 6px 8px; border-radius: 4px; font: inherit;
+  }
+  .modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .modal .progress { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .modal .progress.ok   { color: var(--success); }
+  .modal .progress.fail { color: var(--danger); }
+
+  .toast-stack {
+    position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column;
+    gap: 6px; z-index: 200; max-width: 360px;
+  }
+  .toast {
+    background: var(--panel2); border: 1px solid var(--border);
+    padding: 8px 12px; border-radius: 4px; font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3); opacity: 0; transform: translateY(8px);
+    transition: all 0.2s ease-out;
+  }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.committing { border-color: var(--warn); color: var(--warn); }
+  .toast.committed  { border-color: var(--success); color: var(--success); }
+  .toast.error      { border-color: var(--danger); color: var(--danger); }
+
+  /* Product autocomplete (shared module styles) */
+  .ac-wrap { position: relative; display: inline-block; width: 100%; }
+  .ac-wrap .autocomplete {
+    position: absolute; left: 0; right: 0; top: 100%;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 4px; max-height: 280px; overflow-y: auto;
+    display: none; z-index: 50;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  .ac-wrap .autocomplete.active { display: block; }
+  .ac-wrap .autocomplete-item {
+    padding: 6px 10px; cursor: pointer; font-size: 12px;
+    border-bottom: 1px solid var(--border); color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ac-wrap .autocomplete-item:last-child { border-bottom: none; }
+  .ac-wrap .autocomplete-item:hover,
+  .ac-wrap .autocomplete-item.selected { background: rgba(74,158,255,0.15); }
+  .ac-wrap .autocomplete-item mark { background: transparent; color: var(--accent); font-weight: 600; }
+
+  /* In-progress status (e.g. committing): glow pulse, color unchanged. */
+  .status[data-s=start] {
+    animation: glow-pulse 1.4s infinite ease-in-out;
+  }
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(74,158,255,0.0); }
+    50%      { box-shadow: 0 0 12px 2px rgba(74,158,255,0.55); }
+  }
+</style>
+<script src="/js/product_autocomplete.js"></script>
+</head>
+<body>
+<header>
+  <h1>PO 草稿审核</h1>
+  <span class="muted">本地草稿,未写入生产 DB</span>
+  <span id="wsStatus">offline</span>
+  <div class="spacer"></div>
+  <select id="fStatus">
+    <option value="">全部状态</option>
+    <option value="pending">pending</option>
+    <option value="approved">approved</option>
+    <option value="committed">committed</option>
+    <option value="rejected">rejected</option>
+  </select>
+  <select id="fStore">
+    <option value="">全部门店</option>
+    <option value="1">Eliot (1)</option>
+    <option value="2">Briarwood (2)</option>
+  </select>
+  <button id="btnUpload">上传发票图</button>
+  <button id="btnBulkDelete" title="删除当前筛选条件下的所有草稿">清空当前列表</button>
+  <button id="btnReload">刷新</button>
+</header>
+<main>
+  <aside class="list" id="list">
+    <div class="empty">加载中…</div>
+  </aside>
+  <section class="detail" id="detail">
+    <div class="empty"><- 从左侧选择一条草稿</div>
+  </section>
+</main>
+
+<div class="modal-back" id="uploadModal">
+  <div class="modal">
+    <h3>上传发票图片 (Gemini VLM OCR)</h3>
+    <div class="field">
+      <label>门店</label>
+      <select id="upStore">
+        <option value="1">Eliot (1)</option>
+        <option value="2">Briarwood (2)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>操作员(记入审计)</label>
+      <input type="text" id="upActor" value="admin">
+    </div>
+    <div class="field">
+      <label>发票图片(jpeg / png / webp / heic)</label>
+      <input type="file" id="upFile" accept="image/jpeg,image/png,image/webp,image/heic,image/heif">
+    </div>
+    <div class="progress" id="upProgress"></div>
+    <div class="row">
+      <button class="btn" id="upCancel">取消</button>
+      <button class="btn btn-approve" id="upSubmit">识别并保存草稿</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toasts"></div>
+
+<script>
+(() => {
+  const $ = (s, root=document) => root.querySelector(s);
+  const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  })[c]);
+  const fmtMoney = (n) => '$' + (n ?? 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const fmtTs = (epoch) => epoch ? new Date(epoch * 1000).toLocaleString() : '—';
+
+  let currentId = null;
+  let drafts = [];
+
+  async function loadList() {
+    const status = $('#fStatus').value;
+    const store  = $('#fStore').value;
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (store)  q.set('store_id', store);
+    try {
+      const r = await fetch('/api/admin/po-drafts?' + q.toString());
+      drafts = await r.json();
+      renderList();
+      if (currentId) {
+        const still = drafts.find(d => d.draft_id === currentId);
+        if (still) loadDetail(currentId);
+        else { currentId = null; $('#detail').innerHTML = '<div class="empty">已刷新,之前选中的草稿不在当前筛选中</div>'; }
+      }
+    } catch (e) {
+      $('#list').innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderList() {
+    const root = $('#list');
+    if (!drafts.length) { root.innerHTML = '<div class="empty">无草稿</div>'; return; }
+    root.innerHTML = drafts.map(d => `
+      <div class="list-item ${d.draft_id === currentId ? 'active' : ''}" data-id="${esc(d.draft_id)}">
+        <div class="row1">
+          <span class="vendor">${esc(d.vendor_name || d.vendor_id || '未指定')}</span>
+          <span class="amt">${fmtMoney(d.total)}</span>
+        </div>
+        <div class="meta">
+          <span class="badge ${esc(d.status)}">${esc(d.status)}</span>
+          <span class="badge source">${esc(d.source)}</span>
+          <span>店 ${esc(d.store_id)}</span>
+          <span>${d.total_case} 箱 · ${d.total_qty} 瓶</span>
+        </div>
+        <div class="meta">${fmtTs(d.created_at)} · ${esc(d.vendor_invoice_no || '')}</div>
+      </div>
+    `).join('');
+    $$('#list .list-item').forEach(el => {
+      el.addEventListener('click', () => loadDetail(el.dataset.id));
+    });
+  }
+
+  async function loadDetail(id) {
+    currentId = id;
+    $$('#list .list-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
+    const [d, preview, audit] = await Promise.all([
+      fetch(`/api/admin/po-drafts/${id}`).then(r => r.json()),
+      fetch(`/api/admin/po-drafts/${id}/preview`).then(r => r.json()),
+      fetch(`/api/admin/po-drafts/${id}/audit`).then(r => r.json()),
+    ]);
+    renderDetail(d, preview, audit);
+  }
+
+  function renderDetail(d, preview, audit) {
+    const editable = d.status === 'pending';
+    const canApprove = d.status === 'pending';
+    const canReject  = d.status === 'pending' || d.status === 'approved';
+    const canCommit  = d.status === 'approved';
+
+    const errorsHtml = preview.errors?.length
+      ? `<div class="errors">⚠ ${preview.errors.map(esc).join(' · ')}</div>`
+      : '';
+
+    const linesHtml = d.lines.map((ln, i) => {
+      const lowConf = (ln.confidence ?? 1) < 0.85;
+      const unresolved = !ln.product_id;
+      const rowClass = unresolved ? 'confidence-low' : (lowConf ? 'confidence-low' : '');
+      const inp = (name, val, type='number', step='') => editable
+        ? `<input type="${type}" data-idx="${i}" data-field="${name}" value="${esc(val)}"${step?` step="${step}"`:''}>`
+        : `<span>${esc(val)}</span>`;
+      const pidInp = editable
+        ? `<input type="text" data-idx="${i}" data-field="product_id" value="${esc(ln.product_id || '')}" style="width: 140px;" placeholder="${unresolved ? '未匹配,需手填 SKU' : ''}">`
+        : `<span>${esc((ln.product_id || '').slice(0, 16))}</span>`;
+      const matchHint = ln.match_method && ln.match_method !== 'none'
+        ? `<div style="font-size:10px;color:var(--muted);">${esc(ln.match_method)}${ln.matched_name ? ' -> ' + esc(ln.matched_name.slice(0, 42)) : ''}</div>`
+        : (unresolved ? '<div style="font-size:10px;color:var(--danger);">未匹配目录</div>' : '');
+      const delBtn = editable
+        ? `<button class="btn-del-line" data-idx="${i}" title="删除本行" style="color:var(--danger);background:transparent;border:1px solid var(--danger);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;">x</button>`
+        : '';
+      // Name column: OCR-read name (read-only label) + an editable
+      // "catalog name" input that drives the autocomplete module and
+      // fills product_id on selection. Both visible so human can see
+      // what the invoice says vs what we matched to.
+      const catalogNameInput = editable
+        ? `<div class="ac-wrap">
+             <input type="text" class="ac-cat-name" data-idx="${i}"
+                    value="${esc(ln.matched_name || ln.name || '')}"
+                    placeholder="搜索目录产品名..."
+                    style="width: 100%; background: var(--bg); color: var(--text);
+                           border: 1px solid var(--border); padding: 3px 5px;
+                           border-radius: 3px; font: inherit;">
+             <div class="autocomplete" data-ac-dropdown="${i}"></div>
+           </div>`
+        : `<span>${esc(ln.matched_name || '')}</span>`;
+      return `
+        <tr class="${rowClass}">
+          <td style="max-width: 300px;">
+            <div style="font-size: 11px; color: var(--muted); margin-bottom: 2px;">
+              发票:${esc(ln.name || '')}
+            </div>
+            ${catalogNameInput}
+            ${matchHint}
+          </td>
+          <td>${pidInp}</td>
+          <td class="narrow">${inp('num_of_case', ln.num_of_case)}</td>
+          <td class="narrow">${inp('qty_in_case', ln.qty_in_case)}</td>
+          <td class="narrow">${inp('qty', ln.qty)}</td>
+          <td class="narrow">${inp('unit_cost', ln.unit_cost, 'number', '0.01')}</td>
+          <td class="narrow">${inp('unit_price', ln.unit_price, 'number', '0.01')}</td>
+          <td class="num">${fmtMoney((ln.unit_cost || 0) * (ln.qty || 0))}</td>
+          <td class="num">${ln.last_on_hand_qty ?? ''}</td>
+          <td class="num">${(ln.confidence ?? 1).toFixed(2)}</td>
+          <td class="narrow" style="text-align:center;">
+            ${ln.needs_review
+              ? `<span title="数学不一致: ${ln.num_of_case} x ${ln.qty_in_case} x $${(ln.unit_cost||0).toFixed(2)} != line_total $${(ln.line_total||0).toFixed(2)}" style="color:var(--warn);font-weight:bold;cursor:help;">!</span>`
+              : ''}
+            ${delBtn}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const stockHtml = preview.stock_updates?.length ? `
+      <table>
+        <thead><tr><th>productID</th><th>Δ</th><th>before</th><th>after</th></tr></thead>
+        <tbody>
+          ${preview.stock_updates.map(s => `
+            <tr>
+              <td>${esc(s.product_id.slice(0, 20))}…</td>
+              <td class="num">+${s.delta}</td>
+              <td class="num">${s.before_hint}</td>
+              <td class="num"><strong>${s.after_hint}</strong></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>` : '<div class="empty">无库存更新</div>';
+
+    $('#detail').innerHTML = `
+      <h2>${esc(d.vendor_name || d.vendor_id || '未命名 vendor')}</h2>
+      <div class="hdr-meta">
+        <span class="badge ${esc(d.status)}">${esc(d.status)}</span> ·
+        <span class="badge source">${esc(d.source)}</span> ·
+        店 ${esc(d.store_id)} ·
+        创建: ${fmtTs(d.created_at)} ${d.created_by ? `(${esc(d.created_by)})` : ''}
+        ${d.approved_at ? ` · 批准: ${fmtTs(d.approved_at)} (${esc(d.approved_by)})` : ''}
+        ${d.committed_po_id ? ` · committed PO: ${esc(d.committed_po_id)}` : ''}
+      </div>
+
+      <div class="section" style="margin-bottom: 8px;">
+        <div class="body" style="padding: 8px 14px; display: flex; gap: 14px; align-items: center;">
+          <label style="display: flex; gap: 6px; align-items: center;">
+            <span style="color: var(--muted); font-size: 11px;">发票号</span>
+            <input id="metaInvoiceNo" type="text" value="${esc(d.vendor_invoice_no || '')}"
+                   ${editable ? '' : 'disabled'}
+                   style="background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 3px 6px; border-radius: 3px; font: inherit; width: 180px;">
+          </label>
+          <label style="display: flex; gap: 6px; align-items: center;">
+            <span style="color: var(--muted); font-size: 11px;">发票日期</span>
+            <input id="metaInvoiceDate" type="date" value="${esc(d.invoice_date || '')}"
+                   ${editable ? '' : 'disabled'}
+                   style="background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 3px 6px; border-radius: 3px; font: inherit;">
+          </label>
+          <button class="btn" id="btnSaveMeta" ${editable ? '' : 'disabled'}
+                  style="padding: 4px 10px; font-size: 11px;">保存头部</button>
+          <span style="color: var(--muted); font-size: 10px;">(OCR 识别值为默认,可手改,覆盖后 commit 用手改的)</span>
+        </div>
+      </div>
+
+      ${errorsHtml}
+
+      <div class="actions">
+        <button class="btn" id="btnEditSave" ${editable ? '' : 'disabled'}>保存修改</button>
+        <button class="btn btn-approve" id="btnApprove" ${canApprove ? '' : 'disabled'}>批准 (pending → approved)</button>
+        <button class="btn btn-reject" id="btnReject" ${canReject ? '' : 'disabled'}>拒绝</button>
+        <button class="btn btn-commit" id="btnCommit" ${canCommit ? '' : 'disabled'} title="写入生产 DB (PO + POItem + inventoryTran + inStock)">提交入库</button>
+        <button class="btn btn-reject" id="btnRevert" ${d.status === 'committed' ? '' : 'disabled'} title="撤销已提交的入库(一个事务删除 4 张表的对应行)">撤销入库</button>
+        <button class="btn btn-reject" id="btnDelete" title="删除此草稿(本地 sqlite,不影响 HeroPOS 已提交的数据)">删除草稿</button>
+      </div>
+
+      <div class="section">
+        <h3>明细 · ${d.lines.length} 行 · 合计 ${fmtMoney(d.total)} · ${d.total_case} 箱 / ${d.total_qty} 瓶</h3>
+        <div class="body" style="padding:0;">
+          <table>
+            <thead>
+              <tr>
+                <th>产品名</th><th>productID</th>
+                <th>箱</th><th>箱容</th><th>瓶</th>
+                <th>unitCost</th><th>unitPrice</th><th>金额</th>
+                <th>在手</th><th>置信</th><th></th>
+              </tr>
+            </thead>
+            <tbody>${linesHtml}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>库存更新预览 (UPDATE product.inStock)</h3>
+        <div class="body" style="padding:0;">${stockHtml}</div>
+      </div>
+
+      <div class="section">
+        <h3>PO header SQL</h3>
+        <div class="body"><pre class="sql">${esc(preview.po?.sql || '')}\n\n-- params: ${esc(JSON.stringify(preview.po?.params || []))}</pre></div>
+      </div>
+
+      <div class="section">
+        <h3>POItem SQL · ${preview.items?.length || 0} 行</h3>
+        <div class="body"><pre class="sql">${(preview.items || []).map((it, i) =>
+          `-- 行 ${i+1}\n${esc(it.sql)}\n-- params: ${esc(JSON.stringify(it.params))}`
+        ).join('\n\n')}</pre></div>
+      </div>
+
+      <div class="section">
+        <h3>inventoryTran SQL · ${preview.inventory_trans?.length || 0} 行 (HeroPOS 库存流水)</h3>
+        <div class="body"><pre class="sql">${(preview.inventory_trans || []).map((t, i) =>
+          `-- 行 ${i+1} (product ${esc(t.product_id?.slice(0,16))}, delta ${t.delta > 0 ? '+' : ''}${t.delta})\n${esc(t.sql)}\n-- params: ${esc(JSON.stringify(t.params))}`
+        ).join('\n\n') || '-- (无)'}</pre></div>
+      </div>
+
+      <div class="section">
+        <h3>审计日志 · ${audit.length} 条</h3>
+        <div class="body audit">
+          ${audit.length === 0 ? '<div class="empty">无</div>' :
+            audit.map(a => `
+              <div class="audit-row">
+                <span class="ts">${fmtTs(a.ts)}</span> ·
+                <span class="action">${esc(a.action)}</span> ·
+                actor: ${esc(a.actor)}
+                ${a.note ? ` · note: ${esc(a.note)}` : ''}
+              </div>
+            `).join('')
+          }
+        </div>
+      </div>
+    `;
+
+    $('#btnEditSave')?.addEventListener('click', () => saveEdits(d));
+    $('#btnApprove')?.addEventListener('click', () => doAction('approve'));
+    $('#btnReject') ?.addEventListener('click', () => {
+      const reason = prompt('拒绝原因(可选):', '');
+      if (reason === null) return;
+      doAction('reject', { reason });
+    });
+    $('#btnCommit') ?.addEventListener('click', () => commitDraft(d));
+    $('#btnSaveMeta')?.addEventListener('click', async () => {
+      const body = {
+        actor: 'admin',
+        vendor_invoice_no: $('#metaInvoiceNo').value.trim(),
+        invoice_date:      $('#metaInvoiceDate').value || '',
+      };
+      const r = await fetch(`/api/admin/po-drafts/${d.draft_id}/edit`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      if (r.ok) { await loadList(); loadDetail(d.draft_id); }
+      else { alert('保存失败: ' + await r.text()); }
+    });
+    $('#btnRevert') ?.addEventListener('click', async () => {
+      if (d.status !== 'committed') return;
+      if (!confirm(
+        `撤销入库 PO ${d.committed_po_id}?\n\n` +
+        `这会在一个事务里:\n` +
+        `  - DELETE invWarePos.PO\n` +
+        `  - DELETE invWarePos.POItem\n` +
+        `  - DELETE invWarePos.inventoryTran\n` +
+        `  - UPDATE product.inStock -= <每行 qty>\n\n` +
+        `全成或全不成。之后 draft 变 rejected,要再入库得重新上传发票。`
+      )) return;
+      const password = prompt('管理员密码:');
+      if (password === null) return;
+      const r = await fetch(`/api/admin/po-drafts/${d.draft_id}/revert`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ password, actor: 'admin' }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        alert(`已撤销 PO ${data.reverted_po_id}`);
+        await loadList();
+        loadDetail(d.draft_id);
+      } else {
+        alert('撤销失败: ' + (data.detail || JSON.stringify(data)));
+      }
+    });
+    $('#btnDelete') ?.addEventListener('click', async () => {
+      const msg = d.status === 'committed'
+        ? `此草稿已 committed (PO ID ${d.committed_po_id || '?'}).\n删除只会从本地审核队列移除,HeroPOS 的 PO 行保留。\n\n确定删除?`
+        : `删除草稿 "${d.vendor_name || d.vendor_id || d.draft_id}"?`;
+      if (!confirm(msg)) return;
+      const reason = prompt('删除原因(可选):', '') || '';
+      const r = await fetch(
+        `/api/admin/po-drafts/${d.draft_id}?actor=admin&reason=${encodeURIComponent(reason)}`,
+        { method: 'DELETE' },
+      );
+      if (r.ok) {
+        currentId = null;
+        await loadList();
+        $('#detail').innerHTML = '<div class="empty">草稿已删除</div>';
+      } else {
+        alert('删除失败: ' + await r.text());
+      }
+    });
+
+    // Per-line delete buttons: send truncated lines via /edit
+    $$('.btn-del-line').forEach(btn => btn.addEventListener('click', async () => {
+      const idx = +btn.dataset.idx;
+      const row = d.lines[idx];
+      if (!confirm(`删除 "${row?.name || '(no name)'}" ?`)) return;
+      const lines = d.lines.filter((_, i) => i !== idx);
+      const r = await fetch(`/api/admin/po-drafts/${d.draft_id}/edit`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ lines, actor: 'admin' }),
+      });
+      if (r.ok) {
+        await loadList();     // refresh list panel
+        loadDetail(d.draft_id);  // re-render detail with new line count
+      } else {
+        alert('删除失败: ' + await r.text());
+      }
+    }));
+
+    // Bind product-name autocomplete to each .ac-cat-name input.
+    // Pulls product catalog lazily on first focus, shared across rows.
+    _bindRowAutocompletes(d);
+  }
+
+  // Cache the catalog products per store_id for this page session
+  const _catalogCache = new Map();
+  async function _getCatalog(storeId) {
+    if (_catalogCache.has(storeId)) return _catalogCache.get(storeId);
+    const r = await fetch(`/api/stores/${encodeURIComponent(storeId)}/product-names`);
+    if (!r.ok) return [];
+    const data = await r.json();
+    _catalogCache.set(storeId, data);
+    return data;
+  }
+
+  function _bindRowAutocompletes(draft) {
+    if (!window.createProductAutocomplete) return;   // module not loaded
+    const inputs = $$('.ac-cat-name');
+    inputs.forEach(inp => {
+      const idx = +inp.dataset.idx;
+      const dropdown = document.querySelector(`[data-ac-dropdown="${idx}"]`);
+      if (!dropdown) return;
+      window.createProductAutocomplete({
+        input: inp,
+        dropdown: dropdown,
+        getItems: () => _getCatalog(draft.store_id),
+        onSelect: async (item) => {
+          // Update the two inputs for this row: name + product_id
+          const pidInp = document.querySelector(`input[data-idx="${idx}"][data-field="product_id"]`);
+          inp.value = item.name || '';
+          if (pidInp && item.sku) pidInp.value = item.sku;
+          // Propagate immediately: call edit API with updated line
+          const lines = draft.lines.map(ln => ({...ln}));
+          lines[idx].name = item.name || lines[idx].name;
+          if (item.sku) lines[idx].product_id = item.sku;
+          try {
+            const r = await fetch(`/api/admin/po-drafts/${draft.draft_id}/edit`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ lines, actor: 'admin' }),
+            });
+            if (r.ok) {
+              await loadList();
+              loadDetail(draft.draft_id);
+            }
+          } catch (e) {
+            console.error('autocomplete save failed:', e);
+          }
+        },
+        renderItem: (item, key) => {
+          const name = item.name || '';
+          const skuHint = item.sku ? `<span style="color:var(--muted);font-size:10px;">[${item.sku.slice(0,10)}]</span>` : '';
+          // highlight query inside name
+          const q = (key || '').toLowerCase();
+          const idx2 = name.toLowerCase().indexOf(q);
+          const highlighted = (q && idx2 >= 0)
+            ? esc(name.slice(0, idx2)) + '<mark>' + esc(name.slice(idx2, idx2 + q.length)) + '</mark>' + esc(name.slice(idx2 + q.length))
+            : esc(name);
+          return `<span class="ac-name">${highlighted}</span> ${skuHint}`;
+        },
+      });
+    });
+  }
+
+  async function saveEdits(draft) {
+    const inputs = $$('#detail input[data-idx]');
+    const lines = draft.lines.map(ln => ({...ln}));
+    inputs.forEach(inp => {
+      const i = +inp.dataset.idx, f = inp.dataset.field;
+      if (inp.type === 'text') {
+        lines[i][f] = inp.value.trim();
+      } else {
+        const v = parseFloat(inp.value);
+        if (!isNaN(v)) lines[i][f] = v;
+      }
+    });
+    const body = { lines, actor: 'admin' };
+    const r = await fetch(`/api/admin/po-drafts/${draft.draft_id}/edit`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (r.ok) { loadList(); }
+    else { alert('保存失败: ' + await r.text()); }
+  }
+
+  async function commitDraft(draft) {
+    if (!confirm(`确认要把这条草稿写入生产 DB?\n\nvendor: ${draft.vendor_name}\n金额: ${fmtMoney(draft.total)}\n${draft.total_case} 箱 / ${draft.total_qty} 瓶\n\n此操作将:\n  • 在 invWarePos 插入 PO + POItem\n  • 在 storeWarePos 增加 inStock\n回滚需手工 DELETE。`)) return;
+    const password = prompt('管理员密码:');
+    if (password === null) return;
+    const r = await fetch(`/api/admin/po-drafts/${draft.draft_id}/commit`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ password, actor: 'admin' }),
+    });
+    const data = await r.json();
+    if (r.ok) {
+      alert(`✅ 已写入\n\n新 PO ID: ${data.committed_po_id}`);
+      loadList();
+    } else {
+      alert(`❌ 失败: ${data.detail || JSON.stringify(data)}`);
+    }
+  }
+
+  async function doAction(act, extra = {}) {
+    const r = await fetch(`/api/admin/po-drafts/${currentId}/${act}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ actor: 'admin', ...extra }),
+    });
+    if (r.ok) { loadList(); }
+    else { alert(`${act} 失败: ` + await r.text()); }
+  }
+
+  // -----------------------------------------------------------------
+  // Invoice-OCR upload modal
+  // -----------------------------------------------------------------
+  const modal = $('#uploadModal');
+  const upProgress = $('#upProgress');
+
+  function openUpload() {
+    $('#upFile').value = '';
+    upProgress.textContent = '';
+    upProgress.className = 'progress';
+    modal.classList.add('on');
+  }
+  function closeUpload() { modal.classList.remove('on'); }
+
+  async function submitUpload() {
+    const file = $('#upFile').files[0];
+    if (!file) { upProgress.textContent = '请先选择图片'; upProgress.className = 'progress fail'; return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('store_id', $('#upStore').value);
+    fd.append('created_by', $('#upActor').value || 'admin');
+    fd.append('commit', 'true');
+    upProgress.textContent = 'Gemini 识别中...';
+    upProgress.className = 'progress';
+    $('#upSubmit').disabled = true;
+    try {
+      const r = await fetch('/api/admin/invoice-ocr', { method: 'POST', body: fd });
+      const ct = r.headers.get('content-type') || '';
+      let data = null;
+      let rawText = '';
+      if (ct.includes('application/json')) {
+        data = await r.json();
+      } else {
+        rawText = (await r.text()).slice(0, 200);
+      }
+      if (!r.ok) {
+        const detail = (data && data.detail) || rawText || r.statusText;
+        upProgress.textContent =
+          `失败 (${r.status}): ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`;
+        upProgress.className = 'progress fail';
+        return;
+      }
+      if (!data) {
+        upProgress.textContent = `成功但响应非 JSON (${r.status}): ${rawText}`;
+        upProgress.className = 'progress fail';
+        return;
+      }
+      const matched = data.matched_lines ?? 0;
+      const total = data.total_lines ?? (data.lines?.length ?? 0);
+      upProgress.textContent =
+        `成功: 草稿 ${data.draft_id}, ${total} 行, 匹配 ${matched}/${total} 到目录` +
+        (matched < total ? ' (未匹配行需手工填 product_id 或拒绝 commit)' : '');
+      upProgress.className = matched === total ? 'progress ok' : 'progress';
+      await loadList();
+      if (data.draft_id) loadDetail(data.draft_id);
+      setTimeout(closeUpload, 1200);
+    } catch (e) {
+      upProgress.textContent = '上传错误: ' + e.message;
+      upProgress.className = 'progress fail';
+    } finally {
+      $('#upSubmit').disabled = false;
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // /ws/admin live subscription: committing / committed toasts
+  // -----------------------------------------------------------------
+  const wsStatus = $('#wsStatus');
+  const toasts = $('#toasts');
+  let adminWs = null;
+  let wsPingHandle = null;
+  let wsReconnectHandle = null;
+
+  function showToast(kind, text, ttl=4000) {
+    const t = document.createElement('div');
+    t.className = 'toast ' + kind;
+    t.textContent = text;
+    toasts.appendChild(t);
+    requestAnimationFrame(() => t.classList.add('show'));
+    setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 250);
+    }, ttl);
+  }
+
+  function setWsStatus(kind, text) {
+    wsStatus.textContent = text;
+    wsStatus.className = kind;
+  }
+
+  function openAdminWs() {
+    if (adminWs && adminWs.readyState === WebSocket.OPEN) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws/admin`;
+    try { adminWs = new WebSocket(url); }
+    catch (e) { setWsStatus('down', 'ws err'); scheduleReconnect(); return; }
+
+    adminWs.onopen = () => {
+      setWsStatus('live', 'live');
+      try {
+        adminWs.send(JSON.stringify({ action: 'subscribe_drafts', store_ids: ['*'] }));
+      } catch (e) { /* ignored */ }
+      clearInterval(wsPingHandle);
+      wsPingHandle = setInterval(() => {
+        if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+          try { adminWs.send(JSON.stringify({ action: 'ping' })); }
+          catch (e) { /* ignored */ }
+        }
+      }, 40 * 1000);
+    };
+
+    adminWs.onmessage = (ev) => {
+      let frame;
+      try { frame = JSON.parse(ev.data); }
+      catch (e) { return; }
+      if (frame.type === 'committing') {
+        setWsStatus('commit', 'committing...');
+        showToast('committing', `提交中: 草稿 ${frame.draft_id} (店 ${frame.store_id}, actor ${frame.actor})`);
+      } else if (frame.type === 'committed') {
+        setWsStatus('live', 'live');
+        showToast('committed', `已入库: 草稿 ${frame.draft_id} -> PO ${frame.committed_po_id}`);
+        loadList();
+      } else if (frame.type === 'error') {
+        showToast('error', 'admin ws error: ' + (frame.content || ''));
+      }
+    };
+
+    adminWs.onclose = () => {
+      setWsStatus('down', 'offline');
+      clearInterval(wsPingHandle);
+      scheduleReconnect();
+    };
+    adminWs.onerror = () => {
+      setWsStatus('down', 'ws err');
+    };
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(wsReconnectHandle);
+    wsReconnectHandle = setTimeout(openAdminWs, 3000);
+  }
+
+  window.addEventListener('beforeunload', () => {
+    clearInterval(wsPingHandle);
+    clearTimeout(wsReconnectHandle);
+    if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+      try { adminWs.close(1000, 'page unload'); } catch (e) { /* ignored */ }
+    }
+  });
+
+  // -----------------------------------------------------------------
+  // Wire up
+  // -----------------------------------------------------------------
+  $('#btnReload').addEventListener('click', loadList);
+  $('#fStatus').addEventListener('change', loadList);
+  $('#fStore').addEventListener('change', loadList);
+  $('#btnUpload').addEventListener('click', openUpload);
+  $('#upCancel').addEventListener('click', closeUpload);
+  $('#upSubmit').addEventListener('click', submitUpload);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeUpload(); });
+
+  $('#btnBulkDelete').addEventListener('click', async () => {
+    const status = $('#fStatus').value;
+    const store  = $('#fStore').value;
+    if (!status && !store) {
+      alert('先选筛选条件(状态 / 门店),避免误删全部');
+      return;
+    }
+    const scope = [
+      status ? `状态=${status}` : '',
+      store  ? `门店=${store}`   : '',
+    ].filter(Boolean).join(' · ');
+    if (!confirm(`删除当前筛选 (${scope}) 下所有草稿?不影响 HeroPOS 已提交的数据`)) return;
+    const reason = prompt('批量删除原因(可选):', '') || '';
+    const q = new URLSearchParams({ actor: 'admin', reason });
+    if (status) q.set('status', status);
+    if (store)  q.set('store_id', store);
+    const r = await fetch(`/api/admin/po-drafts/bulk-delete?${q.toString()}`,
+                         { method: 'POST' });
+    const data = await r.json();
+    if (r.ok) {
+      alert(`已删除 ${data.count} 条`);
+      currentId = null;
+      await loadList();
+      $('#detail').innerHTML = '<div class="empty">列表已清空</div>';
+    } else {
+      alert('批量删除失败: ' + (data.detail || JSON.stringify(data)));
+    }
+  });
+
+  loadList();
+  openAdminWs();
+})();
+</script>
+</body>
+</html>
