@@ -1260,11 +1260,12 @@
 
   // ── API base URL: same-origin when the page is itself served by the
   // FastAPI backend (dev via localhost, cloudflared via lo.*); points
-  // to api.lo.empireintegration.com when the page is on GH Pages at
-  // ui.lo.empireintegration.com. Extend this table for new hosts.
+  // to api-lo.empireintegration.com when the page is on GH Pages at
+  // ui-lo.empireintegration.com. Names use dash separators so the
+  // hostnames stay 1-level under Cloudflare Universal SSL coverage.
   const API_BASE = (() => {
     const h = location.hostname;
-    if (h === 'ui.lo.empireintegration.com') return 'https://api.lo.empireintegration.com';
+    if (h === 'ui-lo.empireintegration.com') return 'https://api-lo.empireintegration.com';
     return '';   // same-origin (localhost / lo.* / staging)
   })();
   const WS_BASE = (() => {
