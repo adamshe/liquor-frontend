@@ -1278,6 +1278,17 @@
   const _CROSS_ORIGIN_API = API_BASE !== '';
   const _FETCH_CREDS = _CROSS_ORIGIN_API ? 'include' : 'same-origin';
 
+  // Cross-origin deploy (GH Pages UI -> tunneled API) needs every fetch to
+  // carry the session cookie. Rather than touch every fetch site, wrap the
+  // global fetch once: any call that doesn't explicitly set `credentials`
+  // gets the right value injected. Explicit overrides still win.
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    const opts = init || {};
+    if (opts.credentials === undefined) opts.credentials = _FETCH_CREDS;
+    return _origFetch(input, opts);
+  };
+
   // ── i18n scaffold ────────────────────────────────────────────────
   const I18N = {
     zh: {
