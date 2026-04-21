@@ -2236,7 +2236,10 @@
     const cur = new Set(getRetireBlacklist());
     for (const n of names) if (n) cur.add(String(n).toLowerCase());
     setRetireBlacklist(Array.from(cur));
-    refreshRetireUI();
+    // Fat-finger recovery: auto-expand the retire panel after a retire
+    // action so the just-retired items are immediately visible with the
+    // restore button, no hunt-and-click.
+    refreshRetireUI(true);
   }
   function unretireProduct(name) {
     const lower = String(name || '').toLowerCase();
@@ -2244,6 +2247,36 @@
     const next = getRetireBlacklist().filter(n => n !== lower);
     setRetireBlacklist(next);
     refreshRetireUI();
+  }
+  // Product-list filter used by loadAllProductNames cache + fetch paths.
+  // Blacklisted products are dropped here so they never surface via
+  // autocomplete, stock map, or any other _products-driven UI -- and the
+  // on-disk localStorage cache stays raw (full catalog), so unretire can
+  // bring them back without a re-fetch.
+  function _filterVisibleProducts(items) {
+    const blacklist = new Set(getRetireBlacklist().map(s => s.toLowerCase()));
+    return (items || []).filter(p =>
+      p && p.name && p.name.length >= 3 &&
+      !blacklist.has(p.name.toLowerCase())
+    );
+  }
+  // After a blacklist mutation, re-derive _products for the active store
+  // straight from its raw localStorage cache -- no network hit. If the
+  // cache is missing (first visit, cleared), leave _products as-is; next
+  // loadAllProductNames call will apply the current filter.
+  function _refreshActiveProductsFromCache() {
+    try {
+      const sid = storeSel && storeSel.value;
+      if (!sid) return;
+      const raw = localStorage.getItem(_productCacheKey(sid));
+      if (!raw) return;
+      const cached = JSON.parse(raw);
+      if (Array.isArray(cached.items)) {
+        _products = _filterVisibleProducts(cached.items);
+      }
+    } catch (e) {
+      console.warn('[retire] refresh _products from cache failed:', e);
+    }
   }
   // Mirror "any row checked?" -> vendor-retire button disabled. Called
   // after every table re-render (blacklist change, sort) + on checkbox
@@ -2258,17 +2291,20 @@
   // Re-render every po-main-wrap using its cached viewState, then rebuild
   // the retire panel. Called after any blacklist mutation so views stay
   // coherent without a full server round-trip.
-  function refreshRetireUI() {
+  function refreshRetireUI(expand) {
     document.querySelectorAll('.po-main-wrap').forEach(w => {
       if (w._poViewState) {
         w.innerHTML = renderPOTable(w._poViewState.rows, w._poViewState.sort);
         _syncVendorRetireEnabled(w);
       }
     });
-    renderRetirePanel();
+    _refreshActiveProductsFromCache();
+    renderRetirePanel(expand);
   }
   // Render (or remove) a single retire-panel inside poBody. Idempotent.
-  function renderRetirePanel() {
+  // expand=true -> force the panel open (used right after a retire action
+  // so fat-finger recovery via the per-item restore button is one click).
+  function renderRetirePanel(expand) {
     if (!poBody) return;
     let panel = document.getElementById('retire-panel');
     const list = getRetireBlacklist().slice().sort();
@@ -2282,6 +2318,7 @@
       panel.className = 'retire-panel';
       poBody.appendChild(panel);
     }
+    if (expand) panel.open = true;
     const items = list.map(n =>
       `<li class="retire-item">
         <span class="retire-name" title="${escapeHtml(n)}">${escapeHtml(n)}</span>
@@ -4233,7 +4270,7 @@
           'qty_per_case' in first && 'reorder_level' in first
         );
         if (schemaOk && ageS < PRODUCT_CACHE_TTL_S) {
-          _products = cached.items.filter(p => p && p.name && p.name.length >= 3);
+          _products = _filterVisibleProducts(cached.items);
           console.log('[autocomplete] localStorage cache hit: %d items, age=%ds',
             _products.length, Math.round(ageS));
           return;
@@ -4253,7 +4290,7 @@
       const resp = await fetch(`${API_BASE}/api/stores/${encodeURIComponent(storeId)}/product-names`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const items = await resp.json();
-      _products = items.filter(p => p && p.name && p.name.length >= 3);
+      _products = _filterVisibleProducts(items);
       console.log('[autocomplete] fetched + cached:', _products.length);
       try { localStorage.setItem(key, JSON.stringify({ts: Date.now(), items})); }
       catch (_e) { /* quota exceeded -- still in memory, just not persisted */ }
