@@ -462,11 +462,11 @@
   const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
   // Archive-style box for retire: not destructive (restorable), unlike trash.
   const ICON_ARCHIVE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"></path><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
-  // Bulleted list icon (Feather "list"): three short lines + three dots.
-  // Visually clean, pairs naturally with the copy-rectangles icon (same
-  // visual family) but unmistakably distinct. Semantic: "a list of
-  // items" -- maps to "internal stock list to scan / paste".
-  const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>';
+  // Two horizontal arrows pointing opposite directions -- universal
+  // "transfer / exchange between two locations" symbol. Maps directly
+  // to the use case: move stock from a sister store to this one.
+  // Distinct from the copy-rectangles icon at a glance.
+  const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 20 7 16 11"></polyline><line x1="4" y1="7" x2="20" y2="7"></line><polyline points="8 13 4 17 8 21"></polyline><line x1="20" y1="17" x2="4" y2="17"></line></svg>';
   const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
