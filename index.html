@@ -1526,8 +1526,15 @@
       return;
     }
     if (evt.type === 'po_replace') {
+      // Server-pushed full PO replacement (edit flow). Route to the
+      // streaming area, NOT poBody, so other vendor cards stay visible
+      // and interactive.
       poBuffer = evt.content;
-      if (!_viewingHistoryId) setPO(poBuffer, true);
+      if (!_viewingHistoryId) {
+        const lbl = (vendorSel.selectedOptions[0] && vendorSel.selectedOptions[0].text)
+          || _wsVendorId || '';
+        setStreamArea(poBuffer, true, lbl);
+      }
       return;
     }
     if (evt.type === 'progress') {
