@@ -86,6 +86,10 @@
         </button>
       </span>
     </div>
+    <!-- Live streaming output. Sibling to poBody so renderPOPanel does
+         not blow it away, and so existing vendor cards in poBody stay
+         visible/interactive while a new vendor is mid-stream. -->
+    <div id="streamingArea" class="streaming-area" hidden></div>
     <div class="placeholder" id="poBody" data-i18n="placeholder.po_init">选择门店和供应商,将自动生成建议…</div>
   </div>
 
@@ -458,11 +462,11 @@
   const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
   // Archive-style box for retire: not destructive (restorable), unlike trash.
   const ICON_ARCHIVE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"></path><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
-  // Inbox-with-down-arrow: visually distinct from ICON_COPY (stacked
-  // rectangles). Semantic: "items to bring in / restock". Used for the
-  // low-stock copy button so the operator reads it as "transfer-in
-  // candidate list", not just another copy action.
-  const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>';
+  // Bulleted list icon (Feather "list"): three short lines + three dots.
+  // Visually clean, pairs naturally with the copy-rectangles icon (same
+  // visual family) but unmistakably distinct. Semantic: "a list of
+  // items" -- maps to "internal stock list to scan / paste".
+  const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>';
   const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -734,6 +738,36 @@
     }
     poBody.scrollTop = poBody.scrollHeight;
   };
+
+  // Live-stream sink for in-progress gen. Writes to #streamingArea
+  // which is a SIBLING of poBody, so existing vendor cards (with
+  // collapsible <details> + copy/edit/retire buttons) stay rendered
+  // and interactive while a new vendor is mid-stream. Pass on=false
+  // to clear / hide the area when gen finishes (or errors).
+  const _streamAreaEl = document.getElementById('streamingArea');
+  function setStreamArea(text, on, label) {
+    if (!_streamAreaEl) return;
+    if (typeof _editingPO !== 'undefined' && _editingPO) return;
+    if (!on) {
+      _streamAreaEl.hidden = true;
+      _streamAreaEl.innerHTML = '';
+      return;
+    }
+    _streamAreaEl.hidden = false;
+    const labelHtml = label
+      ? '<div class="streaming-label"><span><span class="pulse"></span>' + escapeHtml(label) + '</span></div>'
+      : '';
+    let body;
+    if (!text) {
+      body = '<pre>(empty)</pre>';
+    } else if (window.marked && /[#|]/.test(text)) {
+      body = window.marked.parse(text);
+    } else {
+      body = '<pre>' + escapeHtml(text) + '</pre>';
+    }
+    _streamAreaEl.innerHTML = labelHtml + body;
+    _streamAreaEl.scrollTop = _streamAreaEl.scrollHeight;
+  }
 
   function wrapSectionsIntoAccordion(md, root, skipTitle, keyPrefix) {
     // Post-process the marked-rendered DOM in `root` (default poBody) so
@@ -1617,8 +1651,12 @@
   }
 
   function _wsOpen(storeId, vendorId, onOpen, onError) {
-    // Close any existing socket first.
+    // Close any existing socket first. Tag the OLD ws as intentional
+    // replacement BEFORE close() so its onclose handler skips the
+    // "连接中断" user-facing message -- otherwise starting a new gen
+    // looks like the new gen's WS just dropped, which it didn't.
     if (_ws && _ws.readyState !== WebSocket.CLOSED) {
+      _ws._intentionalReplace = true;
       try { _ws.close(1000, 'new saga'); } catch (_) {}
     }
     const resume = (_wsStoreId === storeId && _wsVendorId === vendorId) ? _wsResumeSid : null;
@@ -1646,7 +1684,13 @@
     };
     ws.onclose = (e) => {
       _wsStopHeartbeat();
-      // If we were mid-action, surface as error so the UI can clean up.
+      // Race guard: if WE closed this socket on purpose to start a new
+      // saga, _wsCallbacks already points at the NEW gen's callbacks
+      // (streamAction replaced them). Surfacing onClose here would fire
+      // the new gen's "连接中断" message even though no real disconnect
+      // happened -- the new gen's own WS hasn't even opened. Skip the
+      // callback in that case.
+      if (ws._intentionalReplace) return;
       if (_wsCallbacks && _wsCallbacks.onClose) _wsCallbacks.onClose(e);
     };
   }
@@ -1725,8 +1769,10 @@
     poBuffer = '';
     setEmailEnabled(false);
     emailBtn.innerHTML = '<span class="btn-icon">\u2709</span> 发送邮件';
-    setPO('正在生成建议…', true);
-    addMsg(`开始为「${storeSel.selectedOptions[0].text}」生成 ${vendorSel.selectedOptions[0].text} 的采购建议…`, 'sys');
+    const _genVendorLabel = vendorSel.selectedOptions[0]
+      ? vendorSel.selectedOptions[0].text : (vendorSel.value || '');
+    setStreamArea('正在生成建议…', true, _genVendorLabel);
+    addMsg(`开始为「${storeSel.selectedOptions[0].text}」生成 ${_genVendorLabel} 的采购建议…`, 'sys');
     startTimer();
 
     // If user was viewing history, snap back to live for the new generation
@@ -1738,11 +1784,14 @@
       {
         onToken: (tok) => {
           poBuffer += tok;
-          if (!_viewingHistoryId) setPO(poBuffer, true);
+          if (!_viewingHistoryId) setStreamArea(poBuffer, true, _genVendorLabel);
         },
         onDone: () => {
           cancelBtn.style.display = 'none';
-          setPO(poBuffer, false);
+          // Done -- hide the stream area; renderPOPanel (called via
+          // upsertPanelVendor below) repaints poBody with the new
+          // vendor card alongside any others.
+          setStreamArea('', false);
           generating = false;
           sendBtn.disabled = !sessionId;
           msgInput.disabled = false;
@@ -1775,11 +1824,9 @@
         },
         onError: (err) => {
           // Real server-side error frame -- generation actually failed.
-          // Keep wording explicit; don't paint "失败" over a still-running
-          // backend (that case is onClose below, not onError).
           cancelBtn.style.display = 'none';
           addMsg('生成出错: ' + err, 'sys');
-          setPO(poBuffer || '(生成出错)', false);
+          setStreamArea('', false);
           setBusy(false);
           stopTimer(false);
         },
@@ -1787,10 +1834,11 @@
           // Unexpected close mid-stream: WS dropped while generating
           // (cloudflared idle timeout, mobile network blip, tunnel
           // reconnect). The server typically keeps streaming -- the log
-          // is still scrolling -- so do NOT paint "失败" here. Tell the
-          // user the connection broke and the backend may still be
-          // working; partial buffer stays visible. Re-selecting the same
-          // vendor will resume via _wsResumeSid (existing path).
+          // is still scrolling -- so do NOT paint a misleading 失败 here.
+          // Hide the stream area; existing vendor cards in poBody are
+          // already visible (sibling element, untouched), so the user
+          // doesn't lose context. Re-selecting the same vendor in 30s
+          // resumes via _wsResumeSid.
           if (generating) {
             cancelBtn.style.display = 'none';
             addMsg(
@@ -1799,10 +1847,7 @@
               + '若仍无结果请点 刷新 重试。',
               'sys',
             );
-            // Preserve partial buffer; only show placeholder if literally
-            // nothing arrived. Avoid the word "失败" so Stacy doesn't think
-            // the generation truly aborted when it didn't.
-            setPO(poBuffer || '(连接中断, 服务器可能仍在生成)', false);
+            setStreamArea('', false);
             setBusy(false);
             stopTimer(false);
           }
@@ -1863,7 +1908,9 @@
     updateModeHint();
     setBusy(true);
     poBuffer = '';
-    setPO('更新中…', true);
+    const _editVendorLabel = vendorSel.selectedOptions[0]
+      ? vendorSel.selectedOptions[0].text : (_wsVendorId || vendorSel.value || '');
+    setStreamArea('更新中...', true, _editVendorLabel + ' (edit)');
     startTimer();
 
     await streamAction(
@@ -1871,23 +1918,23 @@
       _wsVendorId || vendorSel.value,
       { action: 'edit', message: msg },
       {
-        onToken: (tok) => { poBuffer += tok; setPO(poBuffer, true); },
+        onToken: (tok) => { poBuffer += tok; setStreamArea(poBuffer, true, _editVendorLabel + ' (edit)'); },
         onDone: () => {
-          setPO(poBuffer, false);
+          setStreamArea('', false);
           addMsg('(已更新上方采购建议)', 'ai');
           setBusy(false);
           stopTimer(true);
         },
         onError: (err) => {
           addMsg('错误: ' + err, 'sys');
-          setPO(poBuffer, false);
+          setStreamArea('', false);
           setBusy(false);
           stopTimer(false);
         },
         onClose: (e) => {
           if (generating) {
             addMsg('连接中断 (code=' + e.code + '),请重试', 'sys');
-            setPO(poBuffer, false);
+            setStreamArea('', false);
             setBusy(false);
             stopTimer(false);
           }

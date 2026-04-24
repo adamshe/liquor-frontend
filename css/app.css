@@ -80,6 +80,42 @@
   /* PO toolbar — rigid 3-column grid: [title] [meta flexible] [actions]
      Grid guarantees exactly ONE row regardless of content width.
      Only the middle (meta) cell can overflow; title and actions never reflow. */
+  /* Live streaming generation area. Sits between toolbar and poBody --
+     vendor cards beneath stay visible and interactive (collapsible,
+     copy/edit/retire buttons all work) while new gen streams above.
+     Before this existed, setPO blew away poBody on every token, hiding
+     other vendors and disabling all actions until gen finished. */
+  .streaming-area {
+    background: var(--paper);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px;
+    margin: 4px 0 8px;
+    box-shadow: var(--paper-shadow);
+    font-size: 13px; line-height: 1.4;
+    max-height: 50vh;
+    overflow-y: auto;
+    color: var(--text);
+    font-family: var(--font-serif);
+  }
+  .streaming-area .streaming-label {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.05em;
+    margin-bottom: 6px;
+    font-family: var(--font-ui); font-weight: 600;
+  }
+  .streaming-area .streaming-label .pulse {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); margin-right: 6px;
+    animation: streamPulse 1.2s ease-in-out infinite;
+  }
+  @keyframes streamPulse {
+    0%, 100% { opacity: 0.3; transform: scale(0.8); }
+    50%      { opacity: 1;   transform: scale(1.1); }
+  }
+  .streaming-area pre { white-space: pre-wrap; margin: 0; font: inherit; }
+
   .po-toolbar {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
