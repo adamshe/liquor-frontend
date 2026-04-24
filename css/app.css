@@ -226,24 +226,22 @@
   }
   .btn .btn-icon { font-size: 11px; line-height: 1; }
   .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-  /* UI lock body classes -- dim / block conflicting inner buttons.
-     gen-lock   : a WS generation is streaming; vendor-level edit/retire/close
-                  and row checkboxes would race the server write, so neuter
-                  them without removing visual context.
-     edit-lock  : user has unsaved edits; handled via main-toolbar .disabled
-                  flipped by _applyUILocks (no body-class rules needed here).
-     offline-lock: red dot + toolbar .disabled cover the user-facing story;
-                  no dim on panel interactions since local edit/retire are
-                  allowed even when the server is down. */
-  body.gen-lock #po .vendor-edit,
-  body.gen-lock #po .vendor-retire,
-  body.gen-lock #po .vendor-close {
-    pointer-events: none; opacity: 0.45;
-  }
-  body.gen-lock #po .po-select,
-  body.gen-lock #po .po-select-all {
-    pointer-events: none; opacity: 0.6;
-  }
+  /* UI lock body classes:
+     gen-lock   : a WS generation is streaming. Originally we dimmed
+                  vendor edit/retire/close + row checkboxes here to
+                  prevent races with the in-flight write. After moving
+                  the stream to a sibling #streamingArea (so vendor
+                  cards in poBody stay mounted), the user expects the
+                  EXISTING vendors to be fully interactive while a
+                  different vendor regenerates. The race window is
+                  narrow and the operator value of being able to
+                  collapse / copy / edit other vendors mid-stream is
+                  much higher than the safety. Buttons stay live.
+     edit-lock  : user has unsaved edits; main-toolbar .disabled is
+                  flipped by _applyUILocks (no body-class rules here).
+     offline-lock: red dot + toolbar .disabled cover the offline UX;
+                  panel interactions stay enabled since local edit /
+                  retire work without the server. */
   .btn-ghost {
     background: transparent; color: var(--muted);
     border: 1px solid var(--border-strong);
