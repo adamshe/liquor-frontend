@@ -3405,6 +3405,104 @@
   // inside _startApp -> dot stayed grey (.checking) on the login page.
   _probeApi();
   _checkAuthAndStart();
+
+  // One-tap bug report. Users (rightly) won't copy-paste console output;
+  // this captures the last 80 console lines + current store/vendor state
+  // and POSTs to /api/bug-report which logs to logs/bug_reports.jsonl.
+  // Auth-exempt server-side so the button keeps working even when the
+  // session cookie just got dropped by iOS Safari.
+  const _consoleBuffer = [];
+  (function wrapConsole() {
+    ['log', 'warn', 'error', 'info'].forEach(level => {
+      const orig = console[level].bind(console);
+      console[level] = function (...args) {
+        try {
+          const line = args.map(a => {
+            if (a instanceof Error) return a.message + '\n' + (a.stack || '');
+            if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
+            return String(a);
+          }).join(' ');
+          _consoleBuffer.push('[' + level + '] ' + line.slice(0, 1000));
+          if (_consoleBuffer.length > 80) _consoleBuffer.shift();
+        } catch (_e) { /* never let capture break the app */ }
+        orig(...args);
+      };
+    });
+    window.addEventListener('error', (e) => {
+      _consoleBuffer.push('[uncaught] ' + (e.error ? (e.error.message + '\n' + (e.error.stack || '')) : e.message));
+      if (_consoleBuffer.length > 80) _consoleBuffer.shift();
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      _consoleBuffer.push('[unhandled-rejection] ' + String(e.reason));
+      if (_consoleBuffer.length > 80) _consoleBuffer.shift();
+    });
+  })();
+
+  function _reportContext() {
+    return {
+      store_id: (typeof storeSel !== 'undefined' && storeSel) ? storeSel.value : null,
+      store_name: (typeof storeSel !== 'undefined' && storeSel && storeSel.selectedOptions[0]) ? storeSel.selectedOptions[0].text : null,
+      vendor_id: (typeof vendorSel !== 'undefined' && vendorSel) ? vendorSel.value : null,
+      vendor_name: (typeof vendorSel !== 'undefined' && vendorSel && vendorSel.selectedOptions[0]) ? vendorSel.selectedOptions[0].text : null,
+      api_base: API_BASE,
+      online: _apiOnline,
+      generating: typeof generating !== 'undefined' ? generating : null,
+      editing: typeof _editingPO !== 'undefined' && !!_editingPO,
+      token_present: !!_getStoredToken(),
+    };
+  }
+  async function _submitBugReport(msg) {
+    const body = {
+      message: msg || '',
+      context: _reportContext(),
+      console_log: _consoleBuffer.slice(),
+      url: location.href,
+      user_agent: navigator.userAgent || '',
+    };
+    const r = await fetch(API_BASE + '/api/bug-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }
+
+  // Simple prompt-based UX -- no modal CSS required, works on iPhone Safari.
+  // Button is a fixed-position pill at the bottom-right corner.
+  const _reportBtn = document.createElement('button');
+  _reportBtn.type = 'button';
+  _reportBtn.textContent = currentLang === 'en' ? 'Report' : '反馈';
+  _reportBtn.title = currentLang === 'en'
+    ? 'Send a one-tap bug report (current state + last console messages)'
+    : '一键上报 bug (当前状态 + 最近控制台日志)';
+  _reportBtn.style.cssText = [
+    'position:fixed', 'bottom:12px', 'right:12px', 'z-index:99999',
+    'padding:8px 14px', 'border-radius:20px',
+    'background:rgba(200,74,74,0.92)', 'color:#fff',
+    'border:1px solid rgba(255,255,255,0.2)', 'font:600 12px/1 var(--font-ui)',
+    'cursor:pointer', 'box-shadow:0 2px 8px rgba(0,0,0,0.25)',
+  ].join(';');
+  _reportBtn.addEventListener('click', async () => {
+    const msg = prompt(currentLang === 'en'
+      ? 'Describe what went wrong (optional):'
+      : '描述一下遇到的问题(可选):');
+    if (msg === null) return;   // user canceled
+    _reportBtn.disabled = true;
+    _reportBtn.textContent = currentLang === 'en' ? 'Sending...' : '上传中...';
+    try {
+      const r = await _submitBugReport(msg);
+      alert(currentLang === 'en'
+        ? 'Report received. Thank you.\nid=' + (r.ts || '?')
+        : '已收到, 谢谢!\nid=' + (r.ts || '?'));
+    } catch (e) {
+      alert((currentLang === 'en' ? 'Failed to send: ' : '发送失败: ') + (e.message || e));
+    } finally {
+      _reportBtn.disabled = false;
+      _reportBtn.textContent = currentLang === 'en' ? 'Report' : '反馈';
+    }
+  });
+  document.body.appendChild(_reportBtn);
 })();
 </script>
 </body>

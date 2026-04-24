@@ -85,11 +85,17 @@
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    padding: 2px 0;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--border);
     font-family: var(--font-ui);
-    height: 26px;              /* tight — no vertical reflow ever */
+    min-height: 32px;           /* grow on mobile when actions wrap */
     background: var(--panel);
+    /* Pin to the top of the #po scroll area ABOVE the per-vendor sticky
+       heads. Without this, vendor-panel-head (top:0 z-index:5) renders
+       on top of the toolbar buttons on narrow viewports -- observed on
+       iPhone as "Empire Merchants" text overlapping Refresh/Cancel/Email.
+       z-index 20 > summary z-index 5 so toolbar wins. */
+    position: sticky; top: 0; z-index: 20;
   }
   .po-title {
     font-size: 11px; text-transform: uppercase; letter-spacing: 1.4px;
@@ -577,8 +583,21 @@
        so the user never has to scroll back up to find the commands.
        Multiple <details> siblings handle their own sticky territory, so
        scrolling past one vendor cleanly hands over to the next. */
-    position: sticky; top: 0; z-index: 5;
+    position: sticky; top: 36px; z-index: 5;
     background: var(--paper);
+  }
+  /* On narrow viewports the 6-col fixed grid overflows horizontally and
+     wraps visually on top of the toolbar buttons. Collapse to a flex
+     row that wraps cleanly; alignment with the body table is sacrificed
+     for readability. Keeps copy/edit/retire/close actions visible. */
+  @media (max-width: 700px) {
+    #po details.vendor-panel > summary {
+      grid-template-columns: 1fr auto auto;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+    #po .vendor-total-cases { grid-column: 2; padding-right: 8px; }
+    #po .vendor-total-amount { grid-column: 3; padding-right: 0; }
   }
   #po details.vendor-panel[open] > summary { border-bottom-color: var(--border); }
   #po details.vendor-panel > summary::-webkit-details-marker { display: none; }
