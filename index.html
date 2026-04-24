@@ -132,14 +132,66 @@
   const _CROSS_ORIGIN_API = API_BASE !== '';
   const _FETCH_CREDS = _CROSS_ORIGIN_API ? 'include' : 'same-origin';
 
+  // Auth token stored alongside (or instead of) the session cookie.
+  // iOS Safari (ITP) + any browser with "Block All Cookies" drops our
+  // cross-origin cookie between ui-lo and api-lo, producing a login loop.
+  // We keep the same token in localStorage and send it as
+  // Authorization: Bearer on every API request -- the server's auth gate
+  // accepts whichever arrives. Cookie stays primary when the browser
+  // honors it; the header is the iPhone fallback that stops the loop.
+  const EIP_TOKEN_KEY = 'eip_auth_token';
+  const EIP_TOKEN_EXP_KEY = 'eip_auth_token_exp';
+  function _getStoredToken() {
+    try {
+      const t = localStorage.getItem(EIP_TOKEN_KEY);
+      if (!t) return '';
+      const exp = parseInt(localStorage.getItem(EIP_TOKEN_EXP_KEY) || '0', 10);
+      if (exp && exp < Date.now()) {
+        localStorage.removeItem(EIP_TOKEN_KEY);
+        localStorage.removeItem(EIP_TOKEN_EXP_KEY);
+        return '';
+      }
+      return t;
+    } catch (_e) { return ''; }
+  }
+  function _setStoredToken(token, maxAgeSeconds) {
+    try {
+      if (!token) {
+        localStorage.removeItem(EIP_TOKEN_KEY);
+        localStorage.removeItem(EIP_TOKEN_EXP_KEY);
+        return;
+      }
+      localStorage.setItem(EIP_TOKEN_KEY, token);
+      if (maxAgeSeconds && maxAgeSeconds > 0) {
+        localStorage.setItem(EIP_TOKEN_EXP_KEY, String(Date.now() + maxAgeSeconds * 1000));
+      } else {
+        localStorage.removeItem(EIP_TOKEN_EXP_KEY);
+      }
+    } catch (_e) { /* quota / private mode -- fall through */ }
+  }
+
   // Cross-origin deploy (GH Pages UI -> tunneled API) needs every fetch to
-  // carry the session cookie. Rather than touch every fetch site, wrap the
-  // global fetch once: any call that doesn't explicitly set `credentials`
-  // gets the right value injected. Explicit overrides still win.
+  // carry the session cookie AND (iOS fallback) an Authorization header.
+  // Wrap the global fetch once: any call that doesn't explicitly set
+  // credentials / Authorization gets the right value injected.
   const _origFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const opts = init || {};
     if (opts.credentials === undefined) opts.credentials = _FETCH_CREDS;
+    // Only add Authorization for same-origin or known-API cross-origin
+    // requests. Don't leak the token to third-party hosts a future
+    // feature might fetch from.
+    const url = (typeof input === 'string') ? input : (input && input.url) || '';
+    const isApi = url.startsWith('/') || url.startsWith(API_BASE) ||
+                  (!API_BASE && url.startsWith(location.origin));
+    if (isApi) {
+      const tok = _getStoredToken();
+      if (tok) {
+        const h = new Headers(opts.headers || {});
+        if (!h.has('Authorization')) h.set('Authorization', 'Bearer ' + tok);
+        opts.headers = h;
+      }
+    }
     return _origFetch(input, opts);
   };
 
@@ -3323,6 +3375,16 @@
       });
       if (r.ok) {
         _loginPass.value = '';
+        // Save token from response body so refreshes survive even when the
+        // browser dropped the Set-Cookie (iOS Safari ITP case). The fetch
+        // wrapper then injects Authorization: Bearer on every API call.
+        // When remember is unchecked the server returns max_age=0 and we
+        // store the token as session-scope (no expiry) -- still survives
+        // within the tab.
+        try {
+          const d = await r.clone().json().catch(() => ({}));
+          if (d && d.token) _setStoredToken(d.token, d.max_age || 0);
+        } catch (_e) { /* cookie path will still work where supported */ }
         _startApp();
         return;
       }
