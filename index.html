@@ -214,7 +214,7 @@
       'placeholder.po_init': '选择门店和供应商,将自动生成建议…',
       'placeholder.msg': '例:把 Tito 砍一半 / 加 2 箱 Jameson / 选产品 回车生成',
       'tooltip.copy': '复制订单给业务员',
-      'tooltip.copy_stock': '复制库存清单 (产品名 + 在手瓶数, 内部调拨用)',
+      'tooltip.copy_stock': '复制低库存调拨清单 (有销售 + 在手低于阈值: 750ml+ <6, 200/375ml <10, 50ml <30)',
       'tooltip.edit': '编辑', 'tooltip.delete': '删除',
       'tooltip.back_to_drawer': '移到订单 bucket',
       'tooltip.to_panel': '移到订单面板',
@@ -250,7 +250,7 @@
       'placeholder.po_init': 'Select store and vendor; a suggestion will be generated...',
       'placeholder.msg': 'e.g. cut Tito in half / add 2 cases of Jameson / pick product and press Enter',
       'tooltip.copy': 'Copy order for salesman',
-      'tooltip.copy_stock': 'Copy stock list (name + on-hand bottles, internal transfer)',
+      'tooltip.copy_stock': 'Copy low-stock transfer list (sales + on-hand below threshold: 750ml+ <6, 200/375ml <10, 50ml <30)',
       'tooltip.edit': 'Edit', 'tooltip.delete': 'Delete',
       'tooltip.back_to_drawer': 'Move to order bucket',
       'tooltip.to_panel': 'Move to order panel',
@@ -458,11 +458,11 @@
   const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
   // Archive-style box for retire: not destructive (restorable), unlike trash.
   const ICON_ARCHIVE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"></path><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
-  // Clipboard-with-list: visually distinct from ICON_COPY (two stacked
-  // rectangles). Used for the "copy stock list (name + qty_on_hand)"
-  // button so the operator can tell it apart from the salesman-order
-  // copy at a glance.
-  const ICON_CLIPBOARD_LIST = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1"></rect><line x1="8" y1="11" x2="16" y2="11"></line><line x1="8" y1="15" x2="13" y2="15"></line></svg>';
+  // Inbox-with-down-arrow: visually distinct from ICON_COPY (stacked
+  // rectangles). Semantic: "items to bring in / restock". Used for the
+  // low-stock copy button so the operator reads it as "transfer-in
+  // candidate list", not just another copy action.
+  const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path></svg>';
   const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -2188,7 +2188,7 @@
             <span class="vendor-name">${nm}</span>
             <span class="vendor-actions">
               <button class="vendor-copy" data-id="${id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
-              <button class="vendor-stock-copy" data-id="${id}" title="${t('tooltip.copy_stock')}" aria-label="${t('tooltip.copy_stock')}">${ICON_CLIPBOARD_LIST}</button>
+              <button class="vendor-stock-copy" data-id="${id}" title="${t('tooltip.copy_stock')}" aria-label="${t('tooltip.copy_stock')}">${ICON_LOW_STOCK}</button>
               <button class="vendor-edit" data-id="${id}" title="${t('tooltip.edit')}" aria-label="${t('tooltip.edit')}">${t_edit()}</button>
               <button class="vendor-retire" data-id="${id}" title="${t('tooltip.retire_selected')}" aria-label="${t('tooltip.retire_selected')}" disabled>${ICON_ARCHIVE}</button>
               <button class="vendor-close" data-id="${id}" title="${t('tooltip.back_to_drawer')}" aria-label="${t('tooltip.back_to_drawer')}">${ICON_ARROW_LEFT}</button>
@@ -2259,29 +2259,54 @@
     return lines.join('\n');
   }
 
+  // Per-size low-stock thresholds (in BOTTLES on hand). Below these
+  // counts we consider the row a candidate for an inter-store transfer.
+  // Spec from operator: minis (<=50ml) much higher threshold (sell in
+  // packs), midsize (200/375ml) moderate, standard / large (>=750ml)
+  // tight. Sizes between buckets pick the conservative neighbor.
+  function _lowStockThreshold(sizeMl) {
+    if (sizeMl >= 750) return 6;             // 750ml, 1L, 1.5L, 1.75L, 5L
+    if (sizeMl >= 200 && sizeMl <= 375) return 10;
+    if (sizeMl > 0 && sizeMl <= 50) return 30;
+    // 100ml, 187ml, 500ml, 6PK -- not specified; default to 6 (matches
+    // standard-bottle stance, conservative).
+    return 6;
+  }
+
   function buildStockText(entry) {
-    // Internal stock-transfer format: tab-separated <name>\t<qty_on_hand>,
-    // one product per line. Distinct from buildCopyText (salesman order):
-    // this one has no header and no case counts -- pastes cleanly into
-    // Excel as two columns for warehouse-side inventory comparison.
-    // Stock source: POS catalog cache (_products) by product name;
-    // falls back to "库存 N" embedded in the row's notes if catalog has
-    // no match (e.g. SKU drift). Empty when neither has data.
+    // Low-stock transfer-in candidate list. ONLY rows that:
+    //   1. The system actually wants to reorder (cases > 0 -- proxy for
+    //      "this product has sales / is being managed"), AND
+    //   2. Current on-hand is below the size-keyed threshold.
+    // Output: tab-separated <name>\t<qty_on_hand> per line, no header.
+    // Pastes into Excel as two columns; reviewer scans for transfers
+    // from a sister store. Skips rows where stock is unknown (can't
+    // judge "low" without a number) and discontinued sections.
     const parsed = parsePOMarkdown(entry.markdown || '');
     const stockMap = _productStockMap();   // name(lower) -> qty_on_hand (bottles)
     const STOCK_RX = /(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i;
     const out = [];
     for (const s of parsed.sections) {
-      // Skip retire / discontinued sections -- not items being ordered.
+      // Discontinued / retire sections aren't actively ordered -> skip.
       if (/建议退役|retire|discontinu/i.test(s.title)) continue;
       for (const r of s.rows) {
         if (!r.product) continue;
+        // Sales gate: cases > 0 in this PO means LLM allocated reorder
+        // for it = product is selling and managed.
+        if (!(Number(r.cases) > 0)) continue;
+        // Stock lookup: catalog first, then notes regex.
         let stock = stockMap.get(r.product.toLowerCase());
         if (stock == null) {
           const m = (r.notes || '').match(STOCK_RX);
-          stock = m ? m[1] : '';
+          if (!m) continue;          // no stock number anywhere -- can't judge
+          stock = parseInt(m[1], 10);
         }
-        out.push(`${r.product}\t${stock}`);
+        const stockNum = Number(stock);
+        if (!Number.isFinite(stockNum)) continue;
+        const sizeMl = _sizeMl(r.product);
+        const threshold = _lowStockThreshold(sizeMl);
+        if (stockNum >= threshold) continue;   // not low enough to flag
+        out.push(`${r.product}\t${stockNum}`);
       }
     }
     return out.join('\n');
@@ -2925,20 +2950,26 @@
       } catch (err) { addMsg('复制失败: ' + (err?.message || err), 'sys'); }
       return;
     }
-    // Stock-copy: name + qty_on_hand only, tab-separated. Distinct icon
-    // (clipboard-list) and intent (warehouse / internal transfer) from
-    // the salesman-order copy above.
+    // Stock-copy: name + qty_on_hand for low-stock + has-sales rows only.
+    // Distinct icon (inbox-down) signals "transfer-in candidate list".
     const vendorStockCopyBtn = e.target.closest('.vendor-stock-copy');
     if (vendorStockCopyBtn) {
       e.preventDefault(); e.stopPropagation();
       const v = _poPanel.vendors.find(x => x.id === vendorStockCopyBtn.dataset.id);
       if (!v) return;
       try {
-        await copyToClipboard(buildStockText(v));
+        const text = buildStockText(v);
+        if (!text) {
+          addMsg('无低库存项 (cases=0 或 stock 充足)', 'sys');
+          return;
+        }
+        await copyToClipboard(text);
+        const lines = text.split('\n').length;
+        addMsg('已复制 ' + lines + ' 个低库存项 (调拨候选)', 'sys');
         vendorStockCopyBtn.innerHTML = ICON_CHECK;
         vendorStockCopyBtn.classList.add('copied');
         setTimeout(() => {
-          vendorStockCopyBtn.innerHTML = ICON_CLIPBOARD_LIST;
+          vendorStockCopyBtn.innerHTML = ICON_LOW_STOCK;
           vendorStockCopyBtn.classList.remove('copied');
         }, 1500);
       } catch (err) { addMsg('复制库存失败: ' + (err?.message || err), 'sys'); }
