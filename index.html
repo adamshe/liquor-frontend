@@ -214,6 +214,7 @@
       'placeholder.po_init': '选择门店和供应商,将自动生成建议…',
       'placeholder.msg': '例:把 Tito 砍一半 / 加 2 箱 Jameson / 选产品 回车生成',
       'tooltip.copy': '复制订单给业务员',
+      'tooltip.copy_stock': '复制库存清单 (产品名 + 在手瓶数, 内部调拨用)',
       'tooltip.edit': '编辑', 'tooltip.delete': '删除',
       'tooltip.back_to_drawer': '移到订单 bucket',
       'tooltip.to_panel': '移到订单面板',
@@ -249,6 +250,7 @@
       'placeholder.po_init': 'Select store and vendor; a suggestion will be generated...',
       'placeholder.msg': 'e.g. cut Tito in half / add 2 cases of Jameson / pick product and press Enter',
       'tooltip.copy': 'Copy order for salesman',
+      'tooltip.copy_stock': 'Copy stock list (name + on-hand bottles, internal transfer)',
       'tooltip.edit': 'Edit', 'tooltip.delete': 'Delete',
       'tooltip.back_to_drawer': 'Move to order bucket',
       'tooltip.to_panel': 'Move to order panel',
@@ -456,6 +458,11 @@
   const ICON_ARROW_RIGHT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
   // Archive-style box for retire: not destructive (restorable), unlike trash.
   const ICON_ARCHIVE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"></rect><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"></path><line x1="10" y1="12" x2="14" y2="12"></line></svg>';
+  // Clipboard-with-list: visually distinct from ICON_COPY (two stacked
+  // rectangles). Used for the "copy stock list (name + qty_on_hand)"
+  // button so the operator can tell it apart from the salesman-order
+  // copy at a glance.
+  const ICON_CLIPBOARD_LIST = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1"></rect><line x1="8" y1="11" x2="16" y2="11"></line><line x1="8" y1="15" x2="13" y2="15"></line></svg>';
   const escapeHtml = (s) => s.replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1767,18 +1774,35 @@
           setBusy(false);
         },
         onError: (err) => {
+          // Real server-side error frame -- generation actually failed.
+          // Keep wording explicit; don't paint "失败" over a still-running
+          // backend (that case is onClose below, not onError).
           cancelBtn.style.display = 'none';
-          addMsg('错误: ' + err, 'sys');
-          setPO(poBuffer || '(失败)', false);
+          addMsg('生成出错: ' + err, 'sys');
+          setPO(poBuffer || '(生成出错)', false);
           setBusy(false);
           stopTimer(false);
         },
         onClose: (e) => {
-          // Unexpected close mid-stream (ie we never got onDone/onError)
+          // Unexpected close mid-stream: WS dropped while generating
+          // (cloudflared idle timeout, mobile network blip, tunnel
+          // reconnect). The server typically keeps streaming -- the log
+          // is still scrolling -- so do NOT paint "失败" here. Tell the
+          // user the connection broke and the backend may still be
+          // working; partial buffer stays visible. Re-selecting the same
+          // vendor will resume via _wsResumeSid (existing path).
           if (generating) {
             cancelBtn.style.display = 'none';
-            addMsg('连接中断 (code=' + e.code + '),请重新生成', 'sys');
-            setPO(poBuffer || '(失败)', false);
+            addMsg(
+              '连接中断 (code=' + e.code + ')。'
+              + '服务器可能仍在生成 -- 30 秒后重新选择此供应商会尝试续传;'
+              + '若仍无结果请点 刷新 重试。',
+              'sys',
+            );
+            // Preserve partial buffer; only show placeholder if literally
+            // nothing arrived. Avoid the word "失败" so Stacy doesn't think
+            // the generation truly aborted when it didn't.
+            setPO(poBuffer || '(连接中断, 服务器可能仍在生成)', false);
             setBusy(false);
             stopTimer(false);
           }
@@ -2164,6 +2188,7 @@
             <span class="vendor-name">${nm}</span>
             <span class="vendor-actions">
               <button class="vendor-copy" data-id="${id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
+              <button class="vendor-stock-copy" data-id="${id}" title="${t('tooltip.copy_stock')}" aria-label="${t('tooltip.copy_stock')}">${ICON_CLIPBOARD_LIST}</button>
               <button class="vendor-edit" data-id="${id}" title="${t('tooltip.edit')}" aria-label="${t('tooltip.edit')}">${t_edit()}</button>
               <button class="vendor-retire" data-id="${id}" title="${t('tooltip.retire_selected')}" aria-label="${t('tooltip.retire_selected')}" disabled>${ICON_ARCHIVE}</button>
               <button class="vendor-close" data-id="${id}" title="${t('tooltip.back_to_drawer')}" aria-label="${t('tooltip.back_to_drawer')}">${ICON_ARROW_LEFT}</button>
@@ -2232,6 +2257,34 @@
       }
     }
     return lines.join('\n');
+  }
+
+  function buildStockText(entry) {
+    // Internal stock-transfer format: tab-separated <name>\t<qty_on_hand>,
+    // one product per line. Distinct from buildCopyText (salesman order):
+    // this one has no header and no case counts -- pastes cleanly into
+    // Excel as two columns for warehouse-side inventory comparison.
+    // Stock source: POS catalog cache (_products) by product name;
+    // falls back to "库存 N" embedded in the row's notes if catalog has
+    // no match (e.g. SKU drift). Empty when neither has data.
+    const parsed = parsePOMarkdown(entry.markdown || '');
+    const stockMap = _productStockMap();   // name(lower) -> qty_on_hand (bottles)
+    const STOCK_RX = /(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i;
+    const out = [];
+    for (const s of parsed.sections) {
+      // Skip retire / discontinued sections -- not items being ordered.
+      if (/建议退役|retire|discontinu/i.test(s.title)) continue;
+      for (const r of s.rows) {
+        if (!r.product) continue;
+        let stock = stockMap.get(r.product.toLowerCase());
+        if (stock == null) {
+          const m = (r.notes || '').match(STOCK_RX);
+          stock = m ? m[1] : '';
+        }
+        out.push(`${r.product}\t${stock}`);
+      }
+    }
+    return out.join('\n');
   }
 
   drawerListEl.addEventListener('click', async (e) => {
@@ -2870,6 +2923,25 @@
           vendorCopyBtn.classList.remove('copied');
         }, 1500);
       } catch (err) { addMsg('复制失败: ' + (err?.message || err), 'sys'); }
+      return;
+    }
+    // Stock-copy: name + qty_on_hand only, tab-separated. Distinct icon
+    // (clipboard-list) and intent (warehouse / internal transfer) from
+    // the salesman-order copy above.
+    const vendorStockCopyBtn = e.target.closest('.vendor-stock-copy');
+    if (vendorStockCopyBtn) {
+      e.preventDefault(); e.stopPropagation();
+      const v = _poPanel.vendors.find(x => x.id === vendorStockCopyBtn.dataset.id);
+      if (!v) return;
+      try {
+        await copyToClipboard(buildStockText(v));
+        vendorStockCopyBtn.innerHTML = ICON_CHECK;
+        vendorStockCopyBtn.classList.add('copied');
+        setTimeout(() => {
+          vendorStockCopyBtn.innerHTML = ICON_CLIPBOARD_LIST;
+          vendorStockCopyBtn.classList.remove('copied');
+        }, 1500);
+      } catch (err) { addMsg('复制库存失败: ' + (err?.message || err), 'sys'); }
       return;
     }
     const vendorEditBtn = e.target.closest('.vendor-edit');
