@@ -665,7 +665,7 @@
   #po .vendor-total-amount { grid-column: 5; color: var(--accent); font-weight: 600; }
   #po .vendor-actions { display: inline-flex; gap: 2px; margin-left: 4px; flex: 0 0 auto; }
   /* Touch-friendly: min 36px tap target so iPhone thumbs hit reliably. */
-  #po .vendor-copy, #po .vendor-stock-copy, #po .vendor-edit, #po .vendor-retire, #po .vendor-close {
+  #po .vendor-copy, #po .vendor-stock-copy, #po .vendor-wechat, #po .vendor-edit, #po .vendor-retire, #po .vendor-close {
     background: transparent; border: none; color: var(--muted);
     cursor: pointer; padding: 8px 10px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -673,13 +673,16 @@
     font-size: 18px; line-height: 1;
     min-width: 36px; min-height: 36px;
   }
-  #po .vendor-copy svg, #po .vendor-stock-copy svg, #po .vendor-close svg, #po .vendor-edit svg, #po .vendor-retire svg {
+  #po .vendor-copy svg, #po .vendor-stock-copy svg, #po .vendor-wechat svg, #po .vendor-close svg, #po .vendor-edit svg, #po .vendor-retire svg {
     width: 18px; height: 18px;
     pointer-events: none;  /* click always lands on the button */
   }
   #po .vendor-copy:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   #po .vendor-stock-copy:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   #po .vendor-stock-copy.copied { color: var(--tone-final, #5a9a3a); }
+  #po .vendor-wechat:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
+  #po .vendor-wechat.sent { color: var(--tone-final, #5a9a3a); }
+  #po .vendor-wechat:disabled { opacity: 0.5; cursor: progress; }
   #po .vendor-edit:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   #po .vendor-retire:hover { color: var(--accent); background: rgba(204,120,92,0.10); }
   #po .vendor-retire:disabled { opacity: 0.35; cursor: not-allowed; }
