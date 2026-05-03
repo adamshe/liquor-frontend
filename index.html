@@ -1840,6 +1840,10 @@
               amount: totals.amount,
             };
             upsertPanelVendor(entry);
+            // Persist to backend preorders.json so the digest's sliding-
+            // window filter sees this fresh row. Fire-and-forget (the
+            // visible PO panel does not depend on it landing).
+            try { window._persistPreorder && window._persistPreorder(entry); } catch (_e) { /* ignore */ }
             // Auto-fire email (non-blocking; errors land in addMsg).
             // Two messages per fire: vendor cases + internal transfer
             // bottles, each with a regen tap-link. SKIP during batch
@@ -2860,7 +2864,57 @@
   //    happens automatically. After every vendor finishes, hit
   //    /admin/po-digest/<store_id> to email the grouped ORDER + TRANSFER
   //    digest.
+  // ── Order-gen queue mechanism ────────────────────────────────────
+  // State machine for the per-store batch run:
+  //   idle    -- no batch active; vendor dropdown change does normal gen
+  //   running -- queue worker active; dropdown change ENQUEUES vendor
+  //              instead of firing generatePO directly
+  //   sending -- queue empty, reconciling preorders.json + sending the 2
+  //              digest emails. Enqueue still allowed -- we transition
+  //              back to running and re-drain before sending again.
+  //   done    -- emails sent, batch finalized; back to idle on click
+  const _batch = {
+    state: 'idle',
+    storeId: null,
+    queue: [],          // FIFO of {vendor_id, vendor_name, kind}
+    seen: new Set(),    // dedupe by vendor_id within this batch
+    startTs: 0,         // ms epoch -- sliding-window lower bound
+    processed: 0,
+    failed: 0,
+    label: '',
+    btn: null,
+    origText: '',
+  };
+  // Helper: query / mutate
+  function _batchInProgress_() { return _batch.state === 'running' || _batch.state === 'sending'; }
+  // Backward compat: existing onDone email-suppression checks _batchInProgress
   let _batchInProgress = false;
+  function _setBatchState(next) {
+    _batch.state = next;
+    _batchInProgress = _batchInProgress_();
+  }
+
+  function _renderQueueLabel() {
+    if (!_batch.btn) return;
+    const total = _batch.processed + _batch.queue.length;
+    _batch.btn.innerHTML = `批量 ${_batch.label} ${_batch.processed}/${total}`;
+  }
+
+  function _enqueueAdhoc(vid, name, kind) {
+    if (!vid) return false;
+    if (_batch.seen.has(vid)) return false;          // dedupe
+    if (_batch.state !== 'running' && _batch.state !== 'sending') return false;
+    _batch.seen.add(vid);
+    _batch.queue.push({
+      vendor_id: vid, vendor_name: name || vid, kind: kind || 'order',
+    });
+    addMsg(`ad-hoc 入 queue: ${name} (剩 ${_batch.queue.length})`, 'sys');
+    _renderQueueLabel();
+    return true;
+  }
+  // Expose so the dropdown change handler can call it
+  window._enqueueAdhoc = _enqueueAdhoc;
+
   function _waitForGenComplete(hardTimeoutMs) {
     return new Promise((resolve, reject) => {
       const t0 = Date.now();
@@ -2873,12 +2927,72 @@
     });
   }
 
+  // After every successful gen the batch worker calls this so the
+  // backend has fresh preorders.json data for the digest's sliding-
+  // window filter. Returns the upserted ts.
+  async function _persistPreorder(entry) {
+    try {
+      const r = await fetch(API_BASE + '/api/admin/preorders/upsert', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          store_id: entry.storeId, store_name: entry.storeName,
+          vendor_id: entry.vendorId, vendor_name: entry.vendorName,
+          markdown: entry.markdown,
+          cases: entry.cases || 0, amount: entry.amount || 0,
+        }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        addMsg(`[!] preorders.upsert 失败 ${r.status}: ${t.slice(0,80)}`, 'sys');
+      }
+      return r.ok;
+    } catch (e) {
+      addMsg(`[!] preorders.upsert 网络错误: ${e.message}`, 'sys');
+      return false;
+    }
+  }
+  // Expose so generatePO's onDone can call it
+  window._persistPreorder = _persistPreorder;
+
+  // Drain the queue: pull head, run gen, repeat until empty. Each
+  // iteration may grow the queue (ad-hoc) and the loop notices.
+  async function _drainBatchQueue() {
+    const HARD_TIMEOUT_MS = 15 * 60 * 1000;
+    while (_batch.queue.length > 0) {
+      const v = _batch.queue.shift();
+      _renderQueueLabel();
+      addMsg(`[${_batch.processed + 1}] ${_batch.label} -> ${v.vendor_name}`, 'sys');
+      if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
+        addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
+        _batch.failed += 1;
+        _batch.processed += 1;
+        continue;
+      }
+      vendorSel.value = v.vendor_id;
+      try {
+        generatePO();
+        await _waitForGenComplete(HARD_TIMEOUT_MS);
+        // generatePO's onDone has already called _persistPreorder for us.
+      } catch (e) {
+        addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
+        _batch.failed += 1;
+      }
+      _batch.processed += 1;
+      _renderQueueLabel();
+    }
+  }
+
   function _wireBatchBtn(btnId, storeId, label) {
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener('click', async () => {
+      if (_batchInProgress_()) {
+        addMsg(`${label} batch 已在进行中`, 'sys');
+        return;
+      }
       if (generating) {
-        addMsg(`${label} batch: 正在生成中, 请先取消当前生成`, 'sys');
+        addMsg(`${label} batch: 当前正在生成, 请先取消`, 'sys');
         return;
       }
       let resolved = [];
@@ -2899,70 +3013,74 @@
       const transferCount = resolved.filter(v => v.kind === 'transfer').length;
       const ok = confirm(
         `确认: 逐个生成 ${label} 的 ${resolved.length} 个供应商 ` +
-        `(ORDER ${orderCount} + TRANSFER ${transferCount})?\n` +
+        `(TRANSFER ${transferCount} 先, ORDER ${orderCount} 后)?\n` +
         resolved.map((v, i) => {
           const tag = v.kind === 'transfer' ? '[T]' : '[O]';
           return `  ${i + 1}. ${tag} ${v.vendor_name}`;
         }).join('\n') +
-        `\n\n完成后自动发 2 封分组邮件 (ORDER + TRANSFER).`
+        `\n\n生成期间可继续从 vendor 下拉里选其他供应商, 会加入 queue 一起处理.\n` +
+        `queue 排空后才发分组邮件 (TRANSFER 先, ORDER 后).`
       );
       if (!ok) return;
 
+      // Initialize the batch state machine
+      _batch.storeId = storeId;
+      _batch.label = label;
+      _batch.btn = btn;
+      _batch.origText = btn.innerHTML;
+      _batch.queue = resolved.slice();
+      _batch.seen = new Set(resolved.map(v => v.vendor_id));
+      _batch.startTs = Date.now();
+      _batch.processed = 0;
+      _batch.failed = 0;
+      _setBatchState('running');
       btn.disabled = true;
-      const origText = btn.innerHTML;
-      _batchInProgress = true;
-      // Switch store first (the change handler loads vendors). Use the
-      // existing dropdown change pathway so vendorSel options populate.
+
+      // Switch store first so vendorSel options are populated
       if (storeSel.value !== storeId) {
         storeSel.value = storeId;
         await loadVendors(storeId);
       }
 
-      const HARD_TIMEOUT_MS = 15 * 60 * 1000;
-      let okCount = 0, failCount = 0;
-      for (let i = 0; i < resolved.length; i++) {
-        const v = resolved[i];
-        btn.innerHTML = `批量 ${label} ${i + 1}/${resolved.length}`;
-        addMsg(`[${i + 1}/${resolved.length}] ${label} -> ${v.vendor_name}`, 'sys');
-        if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
-          addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
-          failCount += 1;
-          continue;
-        }
-        vendorSel.value = v.vendor_id;
-        try {
-          generatePO();                               // fire the existing flow
-          await _waitForGenComplete(HARD_TIMEOUT_MS); // resolves when generating flips false
-          okCount += 1;
-        } catch (e) {
-          failCount += 1;
-          addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
-        }
-      }
-
-      btn.innerHTML = `${label} ${okCount}/${resolved.length} 完成, 发邮件...`;
       try {
-        const r = await fetch(API_BASE + `/api/admin/po-digest/${storeId}`, {
-          method: 'POST',
-        });
+        // Drain initial queue + any ad-hoc additions made during the run
+        await _drainBatchQueue();
+
+        // Reconcile phase: queue is empty. Move to sending and re-check
+        // (an ad-hoc enqueue between drain-end and state-switch would
+        // otherwise be missed). If something landed, re-drain.
+        _setBatchState('sending');
+        if (_batch.queue.length > 0) {
+          _setBatchState('running');
+          await _drainBatchQueue();
+          _setBatchState('sending');
+        }
+
+        btn.innerHTML = `${label} ${_batch.processed - _batch.failed}/${_batch.processed} 完成, 发邮件...`;
+        const r = await fetch(
+          API_BASE + `/api/admin/po-digest/${storeId}?since_ms=${_batch.startTs}`,
+          { method: 'POST' }
+        );
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
         const sentCount = (data.emails || []).reduce(
           (a, e) => a + (e.sent_to ? e.sent_to.length : 0), 0
         );
+        const kindsSent = (data.emails || []).map(e => e.kind).join(', ') || '(无)';
         addMsg(
-          `${label} batch 完成: ${okCount}/${resolved.length} 生成成功, ` +
-          `${failCount} 失败, ${sentCount} 封邮件已发`,
+          `${label} batch 完成: gen ${_batch.processed - _batch.failed}/${_batch.processed}, ` +
+          `${sentCount} 封邮件已发 (${kindsSent})`,
           'sys'
         );
       } catch (e) {
-        addMsg(`[X] ${label} digest 邮件发送失败: ${e.message}`, 'sys');
+        addMsg(`[X] ${label} batch 失败: ${e.message}`, 'sys');
       } finally {
-        _batchInProgress = false;
+        _setBatchState('done');
+        // back to idle so next batch can start
+        _setBatchState('idle');
+        _batch.btn = null;
         btn.disabled = false;
-        btn.innerHTML = origText;
-        // Manual batch completion is the same signal as a scheduler
-        // run; persist status by hitting the indicator endpoint.
+        btn.innerHTML = _batch.origText;
         try { refreshBatchStatus(); } catch (_e) { /* ignore */ }
       }
     });
@@ -3800,7 +3918,16 @@
 
   vendorSel.addEventListener('change', () => {
     sessionId = null;
-    if (vendorSel.value && storeSel.value) generatePO();
+    if (!vendorSel.value || !storeSel.value) return;
+    // Batch running: vendor pick joins the queue (deduped) instead of
+    // racing against the worker's in-flight gen. Worker drains the
+    // queue before the digest send -- the new pick gets included.
+    if (_batchInProgress_ && _batchInProgress_() && storeSel.value === _batch.storeId) {
+      const text = vendorSel.selectedOptions[0]?.text || vendorSel.value;
+      _enqueueAdhoc(vendorSel.value, text, 'order');
+      return;
+    }
+    generatePO();
   });
 
   sendBtn.addEventListener('click', sendEdit);
