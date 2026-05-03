@@ -84,6 +84,14 @@
         <button id="emailBtn" class="btn btn-secondary" disabled>
           <span class="btn-icon">✉</span> <span data-i18n="btn.email">发送邮件</span>
         </button>
+        <button id="batchEliotBtn" class="btn btn-secondary"
+                title="Eliot: 生成全部供应商并按 ORDER / TRANSFER 分组发邮件">
+          批量 Eliot
+        </button>
+        <button id="batchBriarBtn" class="btn btn-secondary"
+                title="Briarwood: 生成全部供应商并按 ORDER / TRANSFER 分组发邮件">
+          批量 Briarwood
+        </button>
       </span>
     </div>
     <!-- Live streaming output. Sibling to poBody so renderPOPanel does
@@ -2840,6 +2848,64 @@
       setEmailEnabled(true);
     }
   });
+
+  // ── Per-store batch: generate every vendor for one store, then
+  //    send 2 grouped emails (ORDER + TRANSFER). Long-running, so
+  //    backend runs as background task and we poll status.
+  function _wireBatchBtn(btnId, storeId, label) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const ok = confirm(
+        `确认: 生成 ${label} 全部供应商 PO 并按 ORDER / TRANSFER 分组发送邮件?\n` +
+        `(预计耗时数分钟; 完成后会自动发邮件)`
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      const origText = btn.innerHTML;
+      btn.innerHTML = `批量 ${label} 启动中…`;
+      try {
+        const r = await fetch(API_BASE + `/api/admin/po-batch/${storeId}`, {
+          method: 'POST',
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        addMsg(`已启动 ${label} 批量任务,后台运行中…`, 'sys');
+        btn.innerHTML = `批量 ${label} 运行中`;
+        const poll = setInterval(async () => {
+          try {
+            const sr = await fetch(API_BASE + `/api/admin/po-batch-status/${storeId}`);
+            const st = await sr.json();
+            if (st.status === 'done') {
+              clearInterval(poll);
+              const sentCount = (st.emails || []).reduce(
+                (a, e) => a + (e.sent_to ? e.sent_to.length : 0), 0
+              );
+              addMsg(
+                `${label} 批量完成: 生成 ${st.fresh} 供应商, 发出 ${sentCount} 封邮件`,
+                'sys'
+              );
+              btn.disabled = false;
+              btn.innerHTML = origText;
+            } else if (st.status === 'failed') {
+              clearInterval(poll);
+              addMsg(`${label} 批量失败: ${st.error || '未知错误'}`, 'sys');
+              btn.disabled = false;
+              btn.innerHTML = origText;
+            } else {
+              btn.innerHTML = `批量 ${label} ${st.status}…`;
+            }
+          } catch (_e) { /* keep polling on transient errors */ }
+        }, 8000);
+      } catch (e) {
+        addMsg(`✗ ${label} 批量启动失败: ${e.message}`, 'sys');
+        btn.disabled = false;
+        btn.innerHTML = origText;
+      }
+    });
+  }
+  _wireBatchBtn('batchEliotBtn', '1', 'Eliot');
+  _wireBatchBtn('batchBriarBtn', '2', 'Briarwood');
 
   // ── PO editor wiring (editable rows + add + save to bucket) ──────
   const editPoBtn = document.getElementById('editPoBtn');
