@@ -2444,15 +2444,16 @@
   }
 
   function _buildEmailSubject(ctx, kind) {
-    // Format: "<STORE> <KIND>: <VENDOR> <YYYY-MM-DD h:MM AM/PM>"
+    // Format: "<STORE> <KIND>: <YYYY-MM-DD h:MM AM/PM> <VENDOR>"
+    // Unique '<STORE> <KIND>:' prefix stays in front for Gmail filters;
+    // datetime sits next (most-recent-first scanning), then VENDOR.
     // STORE / VENDOR are the FIRST WORD of their respective names,
-    // upper-cased -- short enough for label filters, unambiguous, no
-    // accidental dashes / colons that would split filter rules.
+    // upper-cased -- short, unambiguous, no dashes / colons.
     const firstWord = (s) => String(s || '').trim().split(/\s+/)[0].toUpperCase();
     const store = firstWord(ctx.storeName || ctx.storeId);
     const vendor = firstWord(ctx.vendorName || ctx.vendorId);
     const kindUpper = kind === 'transfer' ? 'TRANSFER' : 'ORDER';
-    return `${store} ${kindUpper}: ${vendor} ${_formatSubjectDateTime()}`;
+    return `${store} ${kindUpper}: ${_formatSubjectDateTime()} ${vendor}`;
   }
 
   function _regenLink(storeId, vendorId, kind) {
