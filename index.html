@@ -87,10 +87,12 @@
         <button id="batchEliotBtn" class="btn btn-secondary"
                 title="Eliot: 生成全部供应商并按 ORDER / TRANSFER 分组发邮件">
           批量 Eliot
+          <span class="batch-status-dot" id="batchStatus_1" title="今日批量未发送"></span>
         </button>
         <button id="batchBriarBtn" class="btn btn-secondary"
                 title="Briarwood: 生成全部供应商并按 ORDER / TRANSFER 分组发邮件">
           批量 Briarwood
+          <span class="batch-status-dot" id="batchStatus_2" title="今日批量未发送"></span>
         </button>
       </span>
     </div>
@@ -2892,10 +2894,16 @@
         addMsg(`[X] ${label}: batch_vendors 全部 NO MATCH (检查 stores.json)`, 'sys');
         return;
       }
+      const orderCount = resolved.filter(v => v.kind !== 'transfer').length;
+      const transferCount = resolved.filter(v => v.kind === 'transfer').length;
       const ok = confirm(
-        `确认: 按 batch_vendors 顺序逐个生成 ${label} 的 ${resolved.length} 个供应商?\n` +
-        resolved.map((v, i) => `  ${i + 1}. ${v.vendor_name}`).join('\n') +
-        `\n\n完成后自动发分组邮件 (ORDER + TRANSFER).`
+        `确认: 逐个生成 ${label} 的 ${resolved.length} 个供应商 ` +
+        `(ORDER ${orderCount} + TRANSFER ${transferCount})?\n` +
+        resolved.map((v, i) => {
+          const tag = v.kind === 'transfer' ? '[T]' : '[O]';
+          return `  ${i + 1}. ${tag} ${v.vendor_name}`;
+        }).join('\n') +
+        `\n\n完成后自动发 2 封分组邮件 (ORDER + TRANSFER).`
       );
       if (!ok) return;
 
@@ -2952,11 +2960,55 @@
         _batchInProgress = false;
         btn.disabled = false;
         btn.innerHTML = origText;
+        // Manual batch completion is the same signal as a scheduler
+        // run; persist status by hitting the indicator endpoint.
+        try { refreshBatchStatus(); } catch (_e) { /* ignore */ }
       }
     });
   }
   _wireBatchBtn('batchEliotBtn', '1', 'Eliot');
   _wireBatchBtn('batchBriarBtn', '2', 'Briarwood');
+
+  // ── Daily batch status indicator (green = today's run sent OK,
+  //    yellow = not sent yet today / failed). Polls /admin/po-batch-status
+  //    every 60s and on focus; also refreshed after a manual batch run
+  //    completes via /admin/po-digest.
+  async function refreshBatchStatus() {
+    let data = {};
+    try {
+      const r = await fetch(API_BASE + '/api/admin/po-batch-status');
+      if (r.ok) data = await r.json();
+    } catch (_e) { /* offline -- leave dots as-is */ return; }
+    const todayStr = new Date().toISOString().slice(0, 10);  // YYYY-MM-DD local-ish
+    const localToday = new Date();
+    const yyyy = localToday.getFullYear();
+    const mm = String(localToday.getMonth() + 1).padStart(2, '0');
+    const dd = String(localToday.getDate()).padStart(2, '0');
+    const localTodayStr = `${yyyy}-${mm}-${dd}`;
+    for (const sid of ['1', '2']) {
+      const dot = document.getElementById('batchStatus_' + sid);
+      if (!dot) continue;
+      const st = data[sid];
+      const sentAt = st && st.last_sent_at ? String(st.last_sent_at) : '';
+      const sentToday = st && st.ok && sentAt.slice(0, 10) === localTodayStr;
+      dot.classList.toggle('ok', !!sentToday);
+      dot.classList.toggle('pending', !sentToday);
+      if (sentToday) {
+        dot.title = `batch order for ${sentAt.replace('T', ' ')} is sent` +
+                    ` (${st.vendors} vendors, ${st.emails_sent} emails)`;
+      } else if (st && !st.ok && sentAt.slice(0, 10) === localTodayStr) {
+        dot.title = `batch order failed at ${sentAt.replace('T', ' ')}: ` +
+                    (st.error || 'unknown');
+      } else if (st && sentAt) {
+        dot.title = `last batch ${sentAt.replace('T', ' ')} -- today not yet sent`;
+      } else {
+        dot.title = 'batch order for today not sent yet';
+      }
+    }
+  }
+  refreshBatchStatus();
+  setInterval(refreshBatchStatus, 60 * 1000);
+  window.addEventListener('focus', refreshBatchStatus);
 
   // ── PO editor wiring (editable rows + add + save to bucket) ──────
   const editPoBtn = document.getElementById('editPoBtn');
