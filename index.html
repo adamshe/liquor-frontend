@@ -1792,10 +1792,21 @@
     poBuffer = '';
     setEmailEnabled(false);
     emailBtn.innerHTML = '<span class="btn-icon">\u2709</span> 发送邮件';
-    const _genVendorLabel = vendorSel.selectedOptions[0]
-      ? vendorSel.selectedOptions[0].text : (vendorSel.value || '');
+    // Prefer the batch worker's authoritative hint (set right before
+    // it calls generatePO) over re-reading the dropdown -- avoids
+    // showing vendor_id when the DOM hasn't caught up to the worker's
+    // value= assignment yet.
+    const _genHint = (window._currentBatchVendor || _currentBatchVendor || null);
+    const _genVendorLabel =
+      (_genHint && _genHint.vendorId === vendorId && _genHint.vendorName)
+        ? _genHint.vendorName
+        : (vendorSel.selectedOptions[0] ? vendorSel.selectedOptions[0].text : (vendorSel.value || ''));
+    const _genStoreLabel =
+      (_genHint && _genHint.storeId === storeId && _genHint.storeName)
+        ? _genHint.storeName
+        : (storeSel.selectedOptions[0]?.text || storeId);
     setStreamArea('正在生成建议…', true, _genVendorLabel);
-    addMsg(`开始为「${storeSel.selectedOptions[0].text}」生成 ${_genVendorLabel} 的采购建议…`, 'sys');
+    addMsg(`开始为「${_genStoreLabel}」生成 ${_genVendorLabel} 的采购建议…`, 'sys');
     startTimer();
 
     // If user was viewing history, snap back to live for the new generation
@@ -1827,13 +1838,24 @@
             const sid = storeId, vid = vendorId;
             const existing = _poPanel.vendors.find(v =>
               v.storeId === sid && v.vendorId === vid);
+            // Pin store / vendor names from the batch hint when it
+            // matches this gen's ids (DOM-state-independent). Falls
+            // back to the dropdown only when no hint applies (manual
+            // single-vendor flow).
+            const _hint = (window._currentBatchVendor || _currentBatchVendor || null);
             const entry = {
               id: existing ? existing.id
                            : 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
               storeId: sid,
-              storeName: storeSel.selectedOptions[0]?.text || sid,
+              storeName:
+                (_hint && _hint.storeId === sid && _hint.storeName)
+                  ? _hint.storeName
+                  : (storeSel.selectedOptions[0]?.text || sid),
               vendorId: vid,
-              vendorName: vendorSel.selectedOptions[0]?.text || vid,
+              vendorName:
+                (_hint && _hint.vendorId === vid && _hint.vendorName)
+                  ? _hint.vendorName
+                  : (vendorSel.selectedOptions[0]?.text || vid),
               ts: Date.now(),
               markdown: poBuffer,
               cases: totals.cases,
@@ -2864,6 +2886,14 @@
   //    happens automatically. After every vendor finishes, hit
   //    /admin/po-digest/<store_id> to email the grouped ORDER + TRANSFER
   //    digest.
+  // Authoritative {vid, name} hint that the batch worker writes BEFORE
+  // calling generatePO each iteration. generatePO reads it (when set)
+  // instead of re-deriving the name from vendorSel.selectedOptions
+  // -- the dropdown's DOM state can race with the worker's value=
+  // assignment and the streaming area / onDone entry would otherwise
+  // pick up vendor_id (a hash) instead of the human name.
+  let _currentBatchVendor = null;
+
   // ── Order-gen queue mechanism (two-phase) ────────────────────────
   // State machine for one per-store batch run:
   //   idle              -- no batch active
@@ -2984,6 +3014,15 @@
         _batch.processed += 1;
         continue;
       }
+      // Stamp the authoritative vendor hint BEFORE setting .value so
+      // generatePO always sees a consistent {vid, name} pair even if
+      // the dropdown DOM is mid-update.
+      _currentBatchVendor = {
+        storeId: _batch.storeId,
+        storeName: storeSel.selectedOptions[0]?.text || _batch.storeId,
+        vendorId: v.vendor_id,
+        vendorName: v.vendor_name,
+      };
       vendorSel.value = v.vendor_id;
       try {
         generatePO();
@@ -2992,6 +3031,8 @@
       } catch (e) {
         addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
         _batch.failed += 1;
+      } finally {
+        _currentBatchVendor = null;
       }
       _batch.processed += 1;
       _renderQueueLabel();
