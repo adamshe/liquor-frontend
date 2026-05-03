@@ -227,7 +227,7 @@
       'placeholder.msg': '例:把 Tito 砍一半 / 加 2 箱 Jameson / 选产品 回车生成',
       'tooltip.copy': '复制订单给业务员',
       'tooltip.copy_stock': '复制低库存调拨清单 (有销售 + 在手低于阈值: 750ml+ <6, 200/375ml <10, 50ml <30)',
-      'tooltip.send_wechat': '微信推送 (订单 + 调拨清单各一条, 含一键重生成链接)',
+      'tooltip.send_email': '邮件发送 (订单 + 调拨清单各一封, 含一键重生成链接)',
       'tooltip.edit': '编辑', 'tooltip.delete': '删除',
       'tooltip.back_to_drawer': '移到订单 bucket',
       'tooltip.to_panel': '移到订单面板',
@@ -264,7 +264,7 @@
       'placeholder.msg': 'e.g. cut Tito in half / add 2 cases of Jameson / pick product and press Enter',
       'tooltip.copy': 'Copy order for salesman',
       'tooltip.copy_stock': 'Copy low-stock transfer list (sales + on-hand below threshold: 750ml+ <6, 200/375ml <10, 50ml <30)',
-      'tooltip.send_wechat': 'Push to WeChat (order + transfer list, with regen tap-link)',
+      'tooltip.send_email': 'Send email (order + transfer list, with regen tap-link)',
       'tooltip.edit': 'Edit', 'tooltip.delete': 'Delete',
       'tooltip.back_to_drawer': 'Move to order bucket',
       'tooltip.to_panel': 'Move to order panel',
@@ -477,7 +477,7 @@
   // to the use case: move stock from a sister store to this one.
   // Distinct from the copy-rectangles icon at a glance.
   const ICON_LOW_STOCK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 20 7 16 11"></polyline><line x1="4" y1="7" x2="20" y2="7"></line><polyline points="8 13 4 17 8 21"></polyline><line x1="20" y1="17" x2="4" y2="17"></line></svg>';
-  // Paper plane (send): used for the manual WeChat push button. Distinct
+  // Paper plane (send): used for the manual email send button. Distinct
   // from the copy / transfer / archive icons. Same family (single-color
   // line art) so the button row stays visually coherent.
   const ICON_SEND = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
@@ -1838,19 +1838,23 @@
               amount: totals.amount,
             };
             upsertPanelVendor(entry);
-            // Auto-fire WeChat push (non-blocking; errors land in addMsg).
+            // Auto-fire email (non-blocking; errors land in addMsg).
             // Two messages per fire: vendor cases + internal transfer
-            // bottles, each with a regen tap-link.
-            wechatSendForVendor(entry, {
-              storeId: sid,
-              storeName: storeSel.selectedOptions[0]?.text || sid,
-              vendorId: vid,
-              vendorName: vendorSel.selectedOptions[0]?.text || vid,
-            }).then(r => {
-              if (r && r.total > 0) {
-                addMsg(`微信推送 ${r.sent}/${r.total} 条已发`, 'sys');
-              }
-            });
+            // bottles, each with a regen tap-link. SKIP during batch
+            // runs -- batch button sends one grouped digest at the end
+            // and does not want per-vendor mail spam.
+            if (!_batchInProgress) {
+              emailSendForVendor(entry, {
+                storeId: sid,
+                storeName: storeSel.selectedOptions[0]?.text || sid,
+                vendorId: vid,
+                vendorName: vendorSel.selectedOptions[0]?.text || vid,
+              }).then(r => {
+                if (r && r.total > 0) {
+                  addMsg(`邮件 ${r.sent}/${r.total} 封已发`, 'sys');
+                }
+              });
+            }
             setEmailEnabled(true);
             emailBtn.innerHTML = '<span class="btn-icon">\u2709</span> 发送邮件';
           }
@@ -2270,7 +2274,7 @@
             <span class="vendor-actions">
               <button class="vendor-copy" data-id="${id}" title="${t('tooltip.copy')}" aria-label="${t('tooltip.copy')}">${ICON_COPY}</button>
               <button class="vendor-stock-copy" data-id="${id}" title="${t('tooltip.copy_stock')}" aria-label="${t('tooltip.copy_stock')}">${ICON_LOW_STOCK}</button>
-              <button class="vendor-wechat" data-id="${id}" title="${t('tooltip.send_wechat')}" aria-label="${t('tooltip.send_wechat')}">${ICON_SEND}</button>
+              <button class="vendor-email" data-id="${id}" title="${t('tooltip.send_email')}" aria-label="${t('tooltip.send_email')}">${ICON_SEND}</button>
               <button class="vendor-edit" data-id="${id}" title="${t('tooltip.edit')}" aria-label="${t('tooltip.edit')}">${t_edit()}</button>
               <button class="vendor-retire" data-id="${id}" title="${t('tooltip.retire_selected')}" aria-label="${t('tooltip.retire_selected')}" disabled>${ICON_ARCHIVE}</button>
               <button class="vendor-close" data-id="${id}" title="${t('tooltip.back_to_drawer')}" aria-label="${t('tooltip.back_to_drawer')}">${ICON_ARROW_LEFT}</button>
@@ -2394,14 +2398,14 @@
     return out.join('\n');
   }
 
-  // ── WeChat (WxPusher) outbound: auto-fire in generatePO onDone, also
-  //    manual via the vendor-wechat button. Two messages per fire:
-  //      1. order channel  -- salesman cases format (vendor_<vendor> or
-  //         vendor_default fallback resolved server-side)
+  // ── Email outbound: auto-fire in generatePO onDone, also manual via
+  //    the vendor-email button. Two messages per fire:
+  //      1. order channel    -- salesman cases format (vendor_<vendor>
+  //                             or vendor_default fallback)
   //      2. transfer channel -- low-stock bottles (internal_transfer)
-  //    Each message has a tap-link back to the app with ?regen=...
-  //    so the recipient can re-trigger gen with one tap. ────────────
-  function _formatDateTimeForWeChat() {
+  //    Each message has a tap-link back to the app with ?regen=... so
+  //    the recipient can re-trigger gen with one tap. ────────────────
+  function _formatDateTimeForEmail() {
     const now = new Date();
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday',
                   'Thursday', 'Friday', 'Saturday'];
@@ -2414,7 +2418,7 @@
   function _vendorChannelKey(vendorName) {
     // Per-vendor channels are config keys like vendor_<lowercased,
     // hyphenated>. Fallback to vendor_default when the operator hasn't
-    // wired a salesman-specific WxPusher uid yet.
+    // wired a salesman-specific channel yet.
     const slug = String(vendorName || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -2450,50 +2454,47 @@
   }
 
   function _regenLink(storeId, vendorId, kind) {
-    // Tap-link the WeChat user opens to re-trigger gen. We hardcode the
-    // ui-lo origin because that's the public host -- when the page opens
-    // from this URL it parses ?regen=, picks store + vendor, fires gen.
+    // Tap-link the email recipient opens to re-trigger gen. ui-lo is
+    // the public host -- when the page opens from this URL it parses
+    // ?regen=, picks store + vendor, fires gen.
     const base = 'https://ui-lo.empireintegration.com/';
     const q = `?regen=${encodeURIComponent(storeId + ':' + vendorId)}`
             + (kind ? `&kind=${encodeURIComponent(kind)}` : '');
     return base + q;
   }
 
-  // Single send: serialize one channel + body to /api/admin/wechat-send.
+  // Single send: serialize one channel + body to /api/admin/email-send.
   // Errors swallow into addMsg (sys) so an auto-fire failure doesn't
   // throw out of generatePO's onDone -- gen success is independent of
-  // whether the WeChat push landed.
-  async function _wechatSendOne(channel, content, kind, ctx) {
+  // whether the email landed.
+  async function _emailSendOne(channel, content, kind, ctx) {
     if (!content || !content.trim()) return null;
-    const ts = _formatDateTimeForWeChat();
+    const ts = _formatDateTimeForEmail();
     const header =
       `[${ts}]\n`
       + `${ctx.storeName || ctx.storeId} / ${ctx.vendorName || ctx.vendorId} (${kind})\n\n`;
-    const tail = '\n\n[点此重新生成基于最新库存]';
-    const body = header + content + tail;
-    const url = _regenLink(ctx.storeId, ctx.vendorId, kind);
+    const body = header + content;
     try {
-      const r = await fetch(API_BASE + '/api/admin/wechat-send', {
+      const r = await fetch(API_BASE + '/api/admin/email-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          channel, content: body, kind,
-          // Email subject (used as-is by backend when present, no
-          // prefix concat). Format chosen for Gmail label filters:
-          // 'ELIOT ORDER: SOUTHERN 2026-05-02 10:30 PM'
-          summary: _buildEmailSubject(ctx, kind),
-          url,
+          channel, body, kind,
+          // Subject used verbatim by backend (no prefix concat). Format
+          // chosen for Gmail label filters:
+          //   'ELIOT ORDER: SOUTHERN 2026-05-02 10:30 PM'
+          subject: _buildEmailSubject(ctx, kind),
+          regen_url: _regenLink(ctx.storeId, ctx.vendorId, kind),
         }),
       });
       if (!r.ok) {
         const t = await r.text();
-        addMsg(`微信推送失败 (${channel}): ${r.status} ${t.slice(0, 100)}`, 'sys');
+        addMsg(`邮件发送失败 (${channel}): ${r.status} ${t.slice(0, 100)}`, 'sys');
         return null;
       }
-      const data = await r.json();
-      return data;
+      return await r.json();
     } catch (e) {
-      addMsg(`微信推送出错 (${channel}): ${e.message || e}`, 'sys');
+      addMsg(`邮件发送出错 (${channel}): ${e.message || e}`, 'sys');
       return null;
     }
   }
@@ -2501,16 +2502,16 @@
   // Auto / manual fire: send BOTH channels (vendor + internal_transfer)
   // for the given vendor entry. ctx must carry storeId / storeName /
   // vendorId / vendorName. Reused by generatePO onDone (auto) and the
-  // vendor-wechat button click (manual).
-  async function wechatSendForVendor(vendorEntry, ctx) {
+  // vendor-email button click (manual).
+  async function emailSendForVendor(vendorEntry, ctx) {
     const cases = buildCopyText(vendorEntry);
     const stock = buildStockText(vendorEntry);
     const tasks = [];
     if (cases) {
-      tasks.push(_wechatSendOne(_vendorChannelKey(ctx.vendorName), cases, 'order', ctx));
+      tasks.push(_emailSendOne(_vendorChannelKey(ctx.vendorName), cases, 'order', ctx));
     }
     if (stock) {
-      tasks.push(_wechatSendOne('internal_transfer', stock, 'transfer', ctx));
+      tasks.push(_emailSendOne('internal_transfer', stock, 'transfer', ctx));
     }
     const results = await Promise.all(tasks);
     const okCount = results.filter(r => r && r.status === 'sent').length;
@@ -2519,8 +2520,8 @@
 
   // URL-driven auto-regen: when the page opens with ?regen=<store>:<vendor>,
   // wait for stores + vendors to load, then auto-select and fire generatePO.
-  // This closes the loop with the WeChat tap-link: tap notification ->
-  // page opens -> auto-regen -> new push lands.
+  // Closes the loop with the email tap-link: tap notification -> page
+  // opens -> auto-regen -> new email lands.
   let _pendingRegen = (() => {
     try {
       const p = new URLSearchParams(location.search);
@@ -2849,56 +2850,106 @@
     }
   });
 
-  // ── Per-store batch: generate every vendor for one store, then
-  //    send 2 grouped emails (ORDER + TRANSFER). Long-running, so
-  //    backend runs as background task and we poll status.
+  // ── Per-store batch: walk batch_vendors[] one-by-one, programmatically
+  //    setting the dropdowns + firing generatePO each iteration. This
+  //    makes the live PO panel stream identically to the user manually
+  //    selecting each vendor; the difference is just that the click
+  //    happens automatically. After every vendor finishes, hit
+  //    /admin/po-digest/<store_id> to email the grouped ORDER + TRANSFER
+  //    digest.
+  let _batchInProgress = false;
+  function _waitForGenComplete(hardTimeoutMs) {
+    return new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        if (!generating) { clearInterval(tick); resolve(); return; }
+        if (Date.now() - t0 > hardTimeoutMs) {
+          clearInterval(tick); reject(new Error('gen hard timeout'));
+        }
+      }, 250);
+    });
+  }
+
   function _wireBatchBtn(btnId, storeId, label) {
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener('click', async () => {
+      if (generating) {
+        addMsg(`${label} batch: 正在生成中, 请先取消当前生成`, 'sys');
+        return;
+      }
+      let resolved = [];
+      try {
+        const r = await fetch(API_BASE + `/api/admin/po-batch/${storeId}/vendors`);
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        resolved = (data.vendors || []).filter(v => v.vendor_id);
+      } catch (e) {
+        addMsg(`[X] ${label} batch_vendors 解析失败: ${e.message}`, 'sys');
+        return;
+      }
+      if (!resolved.length) {
+        addMsg(`[X] ${label}: batch_vendors 全部 NO MATCH (检查 stores.json)`, 'sys');
+        return;
+      }
       const ok = confirm(
-        `确认: 生成 ${label} 全部供应商 PO 并按 ORDER / TRANSFER 分组发送邮件?\n` +
-        `(预计耗时数分钟; 完成后会自动发邮件)`
+        `确认: 按 batch_vendors 顺序逐个生成 ${label} 的 ${resolved.length} 个供应商?\n` +
+        resolved.map((v, i) => `  ${i + 1}. ${v.vendor_name}`).join('\n') +
+        `\n\n完成后自动发分组邮件 (ORDER + TRANSFER).`
       );
       if (!ok) return;
+
       btn.disabled = true;
       const origText = btn.innerHTML;
-      btn.innerHTML = `批量 ${label} 启动中…`;
+      _batchInProgress = true;
+      // Switch store first (the change handler loads vendors). Use the
+      // existing dropdown change pathway so vendorSel options populate.
+      if (storeSel.value !== storeId) {
+        storeSel.value = storeId;
+        await loadVendors(storeId);
+      }
+
+      const HARD_TIMEOUT_MS = 15 * 60 * 1000;
+      let okCount = 0, failCount = 0;
+      for (let i = 0; i < resolved.length; i++) {
+        const v = resolved[i];
+        btn.innerHTML = `批量 ${label} ${i + 1}/${resolved.length}`;
+        addMsg(`[${i + 1}/${resolved.length}] ${label} -> ${v.vendor_name}`, 'sys');
+        if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
+          addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
+          failCount += 1;
+          continue;
+        }
+        vendorSel.value = v.vendor_id;
+        try {
+          generatePO();                               // fire the existing flow
+          await _waitForGenComplete(HARD_TIMEOUT_MS); // resolves when generating flips false
+          okCount += 1;
+        } catch (e) {
+          failCount += 1;
+          addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
+        }
+      }
+
+      btn.innerHTML = `${label} ${okCount}/${resolved.length} 完成, 发邮件...`;
       try {
-        const r = await fetch(API_BASE + `/api/admin/po-batch/${storeId}`, {
+        const r = await fetch(API_BASE + `/api/admin/po-digest/${storeId}`, {
           method: 'POST',
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-        addMsg(`已启动 ${label} 批量任务,后台运行中…`, 'sys');
-        btn.innerHTML = `批量 ${label} 运行中`;
-        const poll = setInterval(async () => {
-          try {
-            const sr = await fetch(API_BASE + `/api/admin/po-batch-status/${storeId}`);
-            const st = await sr.json();
-            if (st.status === 'done') {
-              clearInterval(poll);
-              const sentCount = (st.emails || []).reduce(
-                (a, e) => a + (e.sent_to ? e.sent_to.length : 0), 0
-              );
-              addMsg(
-                `${label} 批量完成: 生成 ${st.fresh} 供应商, 发出 ${sentCount} 封邮件`,
-                'sys'
-              );
-              btn.disabled = false;
-              btn.innerHTML = origText;
-            } else if (st.status === 'failed') {
-              clearInterval(poll);
-              addMsg(`${label} 批量失败: ${st.error || '未知错误'}`, 'sys');
-              btn.disabled = false;
-              btn.innerHTML = origText;
-            } else {
-              btn.innerHTML = `批量 ${label} ${st.status}…`;
-            }
-          } catch (_e) { /* keep polling on transient errors */ }
-        }, 8000);
+        const sentCount = (data.emails || []).reduce(
+          (a, e) => a + (e.sent_to ? e.sent_to.length : 0), 0
+        );
+        addMsg(
+          `${label} batch 完成: ${okCount}/${resolved.length} 生成成功, ` +
+          `${failCount} 失败, ${sentCount} 封邮件已发`,
+          'sys'
+        );
       } catch (e) {
-        addMsg(`✗ ${label} 批量启动失败: ${e.message}`, 'sys');
+        addMsg(`[X] ${label} digest 邮件发送失败: ${e.message}`, 'sys');
+      } finally {
+        _batchInProgress = false;
         btn.disabled = false;
         btn.innerHTML = origText;
       }
@@ -3287,29 +3338,29 @@
       } catch (err) { addMsg('复制库存失败: ' + (err?.message || err), 'sys'); }
       return;
     }
-    // Manual WeChat push -- mirrors what auto-fires in generatePO onDone.
-    const vendorWechatBtn = e.target.closest('.vendor-wechat');
-    if (vendorWechatBtn) {
+    // Manual email send -- mirrors what auto-fires in generatePO onDone.
+    const vendorEmailBtn = e.target.closest('.vendor-email');
+    if (vendorEmailBtn) {
       e.preventDefault(); e.stopPropagation();
-      const v = _poPanel.vendors.find(x => x.id === vendorWechatBtn.dataset.id);
+      const v = _poPanel.vendors.find(x => x.id === vendorEmailBtn.dataset.id);
       if (!v) return;
-      vendorWechatBtn.disabled = true;
+      vendorEmailBtn.disabled = true;
       try {
-        const res = await wechatSendForVendor(v, {
+        const res = await emailSendForVendor(v, {
           storeId: v.storeId,
           storeName: v.storeName,
           vendorId: v.vendorId,
           vendorName: v.vendorName,
         });
         if (res.sent === 0) {
-          addMsg('微信推送: 0 条 (检查 config/wechat_channels.yaml)', 'sys');
+          addMsg('邮件: 0 封 (检查 config/email_channels.yaml)', 'sys');
         } else {
-          addMsg(`微信推送 ${res.sent}/${res.total} 条已发`, 'sys');
-          vendorWechatBtn.classList.add('sent');
-          setTimeout(() => vendorWechatBtn.classList.remove('sent'), 1500);
+          addMsg(`邮件 ${res.sent}/${res.total} 封已发`, 'sys');
+          vendorEmailBtn.classList.add('sent');
+          setTimeout(() => vendorEmailBtn.classList.remove('sent'), 1500);
         }
       } finally {
-        vendorWechatBtn.disabled = false;
+        vendorEmailBtn.disabled = false;
       }
       return;
     }
@@ -3786,7 +3837,7 @@
     _hideLogin();
     loadStores();
     // Probe already kicked off at module init below; do not re-start here.
-    // If we landed here via a WeChat tap-link (?regen=<store>:<vendor>),
+    // If we landed here via an email tap-link (?regen=<store>:<vendor>),
     // wait for stores + vendors to populate and auto-fire generatePO.
     _maybeApplyPendingRegen();
   }
