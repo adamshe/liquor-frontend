@@ -2414,6 +2414,33 @@
     return slug ? 'vendor_' + slug : 'vendor_default';
   }
 
+  function _formatSubjectDateTime() {
+    // 12-hour clock with AM/PM, matches the operator-requested email
+    // subject pattern (Stacy uses Gmail label filters and wants the
+    // exact shape "ELIOT ORDER: SOUTHERN 2026-05-02 10:30 PM").
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    let h = d.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${h}:${min} ${ampm}`;
+  }
+
+  function _buildEmailSubject(ctx, kind) {
+    // Format: "<STORE> <KIND>: <VENDOR> <YYYY-MM-DD h:MM AM/PM>"
+    // STORE / VENDOR are the FIRST WORD of their respective names,
+    // upper-cased -- short enough for label filters, unambiguous, no
+    // accidental dashes / colons that would split filter rules.
+    const firstWord = (s) => String(s || '').trim().split(/\s+/)[0].toUpperCase();
+    const store = firstWord(ctx.storeName || ctx.storeId);
+    const vendor = firstWord(ctx.vendorName || ctx.vendorId);
+    const kindUpper = kind === 'transfer' ? 'TRANSFER' : 'ORDER';
+    return `${store} ${kindUpper}: ${vendor} ${_formatSubjectDateTime()}`;
+  }
+
   function _regenLink(storeId, vendorId, kind) {
     // Tap-link the WeChat user opens to re-trigger gen. We hardcode the
     // ui-lo origin because that's the public host -- when the page opens
@@ -2443,7 +2470,10 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channel, content: body, kind,
-          summary: `${ctx.vendorName || ctx.vendorId} ${kind}`,
+          // Email subject (used as-is by backend when present, no
+          // prefix concat). Format chosen for Gmail label filters:
+          // 'ELIOT ORDER: SOUTHERN 2026-05-02 10:30 PM'
+          summary: _buildEmailSubject(ctx, kind),
           url,
         }),
       });
