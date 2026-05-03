@@ -2864,55 +2864,71 @@
   //    happens automatically. After every vendor finishes, hit
   //    /admin/po-digest/<store_id> to email the grouped ORDER + TRANSFER
   //    digest.
-  // ── Order-gen queue mechanism ────────────────────────────────────
-  // State machine for the per-store batch run:
-  //   idle    -- no batch active; vendor dropdown change does normal gen
-  //   running -- queue worker active; dropdown change ENQUEUES vendor
-  //              instead of firing generatePO directly
-  //   sending -- queue empty, reconciling preorders.json + sending the 2
-  //              digest emails. Enqueue still allowed -- we transition
-  //              back to running and re-drain before sending again.
-  //   done    -- emails sent, batch finalized; back to idle on click
+  // ── Order-gen queue mechanism (two-phase) ────────────────────────
+  // State machine for one per-store batch run:
+  //   idle              -- no batch active
+  //   transfer          -- worker draining queueTransfer (FIFO, fixed
+  //                        from config). Ad-hoc dropdown picks land in
+  //                        queueOrder (NOT queueTransfer -- transfer set
+  //                        is config-fixed, time-critical).
+  //   transfer-sending  -- transfer queue empty, sending TRANSFER email
+  //   order             -- worker draining queueOrder; ad-hoc adds OK
+  //   order-sending     -- order queue empty, reconciling + sending
+  //                        ORDER email. If a late ad-hoc landed before
+  //                        the send, re-drain.
+  //   done              -- both emails sent; flip back to idle
   const _batch = {
     state: 'idle',
     storeId: null,
-    queue: [],          // FIFO of {vendor_id, vendor_name, kind}
-    seen: new Set(),    // dedupe by vendor_id within this batch
-    startTs: 0,         // ms epoch -- sliding-window lower bound
+    queueTransfer: [],   // FIFO, drained in transfer phase
+    queueOrder: [],      // FIFO, drained in order phase, mutable via ad-hoc
+    seen: new Set(),     // dedupe by vendor_id across BOTH queues
+    startTs: 0,          // ms epoch -- sliding-window lower bound
     processed: 0,
     failed: 0,
     label: '',
     btn: null,
     origText: '',
   };
-  // Helper: query / mutate
-  function _batchInProgress_() { return _batch.state === 'running' || _batch.state === 'sending'; }
-  // Backward compat: existing onDone email-suppression checks _batchInProgress
+  function _batchInProgress_() {
+    return ['transfer','transfer-sending','order','order-sending'].includes(_batch.state);
+  }
+  // Backward compat for generatePO onDone email suppression
   let _batchInProgress = false;
   function _setBatchState(next) {
     _batch.state = next;
     _batchInProgress = _batchInProgress_();
   }
 
+  function _totalQueueLen() {
+    return _batch.queueTransfer.length + _batch.queueOrder.length;
+  }
   function _renderQueueLabel() {
     if (!_batch.btn) return;
-    const total = _batch.processed + _batch.queue.length;
-    _batch.btn.innerHTML = `批量 ${_batch.label} ${_batch.processed}/${total}`;
+    const total = _batch.processed + _totalQueueLen();
+    const phase = _batch.state === 'transfer' ? 'T'
+                : _batch.state === 'order' ? 'O'
+                : _batch.state.includes('sending') ? 'send' : '';
+    _batch.btn.innerHTML = `批量 ${_batch.label} ${_batch.processed}/${total}${phase ? ' ' + phase : ''}`;
   }
 
-  function _enqueueAdhoc(vid, name, kind) {
+  // Ad-hoc enqueue: only goes to queueOrder. Allowed during transfer
+  // / transfer-sending / order phases. Dedupes by vendor_id.
+  function _enqueueAdhoc(vid, name) {
     if (!vid) return false;
-    if (_batch.seen.has(vid)) return false;          // dedupe
-    if (_batch.state !== 'running' && _batch.state !== 'sending') return false;
+    if (_batch.seen.has(vid)) {
+      addMsg(`ad-hoc dedupe: ${name} 已在 queue`, 'sys');
+      return false;
+    }
+    if (!['transfer','transfer-sending','order'].includes(_batch.state)) {
+      return false;  // order-sending / done / idle
+    }
     _batch.seen.add(vid);
-    _batch.queue.push({
-      vendor_id: vid, vendor_name: name || vid, kind: kind || 'order',
-    });
-    addMsg(`ad-hoc 入 queue: ${name} (剩 ${_batch.queue.length})`, 'sys');
+    _batch.queueOrder.push({vendor_id: vid, vendor_name: name || vid, kind: 'order'});
+    addMsg(`ad-hoc 入 ORDER queue: ${name} (剩 ${_batch.queueOrder.length})`, 'sys');
     _renderQueueLabel();
     return true;
   }
-  // Expose so the dropdown change handler can call it
   window._enqueueAdhoc = _enqueueAdhoc;
 
   function _waitForGenComplete(hardTimeoutMs) {
@@ -2927,9 +2943,8 @@
     });
   }
 
-  // After every successful gen the batch worker calls this so the
-  // backend has fresh preorders.json data for the digest's sliding-
-  // window filter. Returns the upserted ts.
+  // Persist a single completed gen to backend preorders.json so the
+  // digest's sliding-window filter sees it. Fire-and-forget.
   async function _persistPreorder(entry) {
     try {
       const r = await fetch(API_BASE + '/api/admin/preorders/upsert', {
@@ -2952,17 +2967,17 @@
       return false;
     }
   }
-  // Expose so generatePO's onDone can call it
   window._persistPreorder = _persistPreorder;
 
-  // Drain the queue: pull head, run gen, repeat until empty. Each
-  // iteration may grow the queue (ad-hoc) and the loop notices.
-  async function _drainBatchQueue() {
+  // Drain an array reference until empty. Caller picks queueTransfer or
+  // queueOrder. ad-hoc may grow queueOrder mid-loop (we read .length
+  // each iteration so additions are picked up).
+  async function _drainQueue(queueRef) {
     const HARD_TIMEOUT_MS = 15 * 60 * 1000;
-    while (_batch.queue.length > 0) {
-      const v = _batch.queue.shift();
+    while (queueRef.length > 0) {
+      const v = queueRef.shift();
       _renderQueueLabel();
-      addMsg(`[${_batch.processed + 1}] ${_batch.label} -> ${v.vendor_name}`, 'sys');
+      addMsg(`[${_batch.processed + 1}] ${_batch.label} -> ${v.vendor_name} (${v.kind})`, 'sys');
       if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
         addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
         _batch.failed += 1;
@@ -2973,13 +2988,36 @@
       try {
         generatePO();
         await _waitForGenComplete(HARD_TIMEOUT_MS);
-        // generatePO's onDone has already called _persistPreorder for us.
+        // generatePO onDone calls _persistPreorder for us
       } catch (e) {
         addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
         _batch.failed += 1;
       }
       _batch.processed += 1;
       _renderQueueLabel();
+    }
+  }
+
+  // POST one digest kind. Returns the {sent_to, vendor_count, ...} body
+  // or {} on failure (already addMsg'd).
+  async function _sendDigestKind(storeId, kind, sinceMs) {
+    try {
+      const r = await fetch(
+        API_BASE + `/api/admin/po-digest/${storeId}/${kind}?since_ms=${sinceMs}`,
+        { method: 'POST' }
+      );
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      const n = (data.sent_to || []).length;
+      if (data.status === 'empty') {
+        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件: 无 vendor 可发`, 'sys');
+      } else {
+        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件已发 (${n} 收件人, ${data.vendor_count} vendors)`, 'sys');
+      }
+      return data;
+    } catch (e) {
+      addMsg(`[X] ${_batch.label} ${kind.toUpperCase()} 邮件失败: ${e.message}`, 'sys');
+      return {};
     }
   }
 
@@ -3009,74 +3047,64 @@
         addMsg(`[X] ${label}: batch_vendors 全部 NO MATCH (检查 stores.json)`, 'sys');
         return;
       }
-      const orderCount = resolved.filter(v => v.kind !== 'transfer').length;
-      const transferCount = resolved.filter(v => v.kind === 'transfer').length;
+      const transferList = resolved.filter(v => v.kind === 'transfer');
+      const orderList = resolved.filter(v => v.kind !== 'transfer');
       const ok = confirm(
-        `确认: 逐个生成 ${label} 的 ${resolved.length} 个供应商 ` +
-        `(TRANSFER ${transferCount} 先, ORDER ${orderCount} 后)?\n` +
-        resolved.map((v, i) => {
-          const tag = v.kind === 'transfer' ? '[T]' : '[O]';
-          return `  ${i + 1}. ${tag} ${v.vendor_name}`;
-        }).join('\n') +
-        `\n\n生成期间可继续从 vendor 下拉里选其他供应商, 会加入 queue 一起处理.\n` +
-        `queue 排空后才发分组邮件 (TRANSFER 先, ORDER 后).`
+        `确认: 两阶段批量 ${label}\n` +
+        `Phase 1 TRANSFER (${transferList.length}): ${transferList.map(v => v.vendor_name).join(', ') || '(无)'}\n` +
+        `  -> 完成后立即发 TRANSFER 邮件\n` +
+        `Phase 2 ORDER (${orderList.length}): ${orderList.map(v => v.vendor_name).join(', ') || '(无)'}\n` +
+        `  -> 期间可从下拉 ad-hoc 加入此 queue (dedupe)\n` +
+        `  -> queue 排空立即发 ORDER 邮件`
       );
       if (!ok) return;
 
-      // Initialize the batch state machine
+      // Init state machine
       _batch.storeId = storeId;
       _batch.label = label;
       _batch.btn = btn;
       _batch.origText = btn.innerHTML;
-      _batch.queue = resolved.slice();
+      _batch.queueTransfer = transferList.slice();
+      _batch.queueOrder = orderList.slice();
       _batch.seen = new Set(resolved.map(v => v.vendor_id));
       _batch.startTs = Date.now();
       _batch.processed = 0;
       _batch.failed = 0;
-      _setBatchState('running');
       btn.disabled = true;
 
-      // Switch store first so vendorSel options are populated
       if (storeSel.value !== storeId) {
         storeSel.value = storeId;
         await loadVendors(storeId);
       }
 
       try {
-        // Drain initial queue + any ad-hoc additions made during the run
-        await _drainBatchQueue();
+        // ----- Phase 1: TRANSFER --------------------------------------
+        _setBatchState('transfer');
+        await _drainQueue(_batch.queueTransfer);
+        _setBatchState('transfer-sending');
+        await _sendDigestKind(storeId, 'transfer', _batch.startTs);
 
-        // Reconcile phase: queue is empty. Move to sending and re-check
-        // (an ad-hoc enqueue between drain-end and state-switch would
-        // otherwise be missed). If something landed, re-drain.
-        _setBatchState('sending');
-        if (_batch.queue.length > 0) {
-          _setBatchState('running');
-          await _drainBatchQueue();
-          _setBatchState('sending');
+        // ----- Phase 2: ORDER -----------------------------------------
+        _setBatchState('order');
+        await _drainQueue(_batch.queueOrder);
+        _setBatchState('order-sending');
+        // Reconcile: ad-hoc landed between drain-end and state switch?
+        if (_batch.queueOrder.length > 0) {
+          _setBatchState('order');
+          await _drainQueue(_batch.queueOrder);
+          _setBatchState('order-sending');
         }
+        await _sendDigestKind(storeId, 'order', _batch.startTs);
 
-        btn.innerHTML = `${label} ${_batch.processed - _batch.failed}/${_batch.processed} 完成, 发邮件...`;
-        const r = await fetch(
-          API_BASE + `/api/admin/po-digest/${storeId}?since_ms=${_batch.startTs}`,
-          { method: 'POST' }
-        );
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-        const sentCount = (data.emails || []).reduce(
-          (a, e) => a + (e.sent_to ? e.sent_to.length : 0), 0
-        );
-        const kindsSent = (data.emails || []).map(e => e.kind).join(', ') || '(无)';
         addMsg(
-          `${label} batch 完成: gen ${_batch.processed - _batch.failed}/${_batch.processed}, ` +
-          `${sentCount} 封邮件已发 (${kindsSent})`,
+          `${label} batch 完成: ${_batch.processed - _batch.failed}/${_batch.processed} 生成, ` +
+          `${_batch.failed} 失败`,
           'sys'
         );
       } catch (e) {
-        addMsg(`[X] ${label} batch 失败: ${e.message}`, 'sys');
+        addMsg(`[X] ${label} batch 异常: ${e.message}`, 'sys');
       } finally {
         _setBatchState('done');
-        // back to idle so next batch can start
         _setBatchState('idle');
         _batch.btn = null;
         btn.disabled = false;
