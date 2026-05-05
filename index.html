@@ -3007,11 +3007,9 @@
     while (queueRef.length > 0) {
       const v = queueRef.shift();
       _renderQueueLabel();
-      const idx = _batch.processed + 1;
-      const totalSoFar = idx + queueRef.length;
-      addMsg(`  [${idx}/${totalSoFar}] ${v.kind.toUpperCase()} ${v.vendor_name} -> generating ...`, 'sys');
+      addMsg(`[${_batch.processed + 1}] ${_batch.label} -> ${v.vendor_name} (${v.kind})`, 'sys');
       if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
-        addMsg(`  [${idx}/${totalSoFar}] ${v.kind.toUpperCase()} ${v.vendor_name} -> NOT IN DROPDOWN, skip`, 'sys');
+        addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
         _batch.failed += 1;
         _batch.processed += 1;
         continue;
@@ -3023,32 +3021,12 @@
         vendorName: v.vendor_name,
       };
       vendorSel.value = v.vendor_id;
-      const v_t0 = Date.now();
       try {
         generatePO();
         await _waitForGenComplete(HARD_TIMEOUT_MS);
-        // generatePO onDone calls _persistPreorder for us. Pull stats
-        // from the just-saved _poPanel entry so the "done" line in
-        // the log matches what run_po_batch.cmd shows.
-        const elapsed = Math.round((Date.now() - v_t0) / 1000);
-        const minute = Math.floor(elapsed / 60);
-        const sec = String(elapsed % 60).padStart(2, '0');
-        const entry = (_poPanel && _poPanel.vendors)
-          ? _poPanel.vendors.find(x => x.vendorId === v.vendor_id)
-          : null;
-        const cases = entry?.cases ?? 0;
-        const amount = entry?.amount ?? 0;
-        addMsg(
-          `  [${idx}/${totalSoFar}] ${v.kind.toUpperCase()} ${v.vendor_name} -> done  ` +
-          `cases=${cases} amount=$${amount.toFixed(2)}  elapsed=${minute}m${sec}s`,
-          'sys'
-        );
+        // generatePO onDone calls _persistPreorder for us
       } catch (e) {
-        const elapsed = Math.round((Date.now() - v_t0) / 1000);
-        addMsg(
-          `  [${idx}/${totalSoFar}] ${v.kind.toUpperCase()} ${v.vendor_name} -> EXCEPTION (${e.message})  elapsed=${elapsed}s`,
-          'sys'
-        );
+        addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
         _batch.failed += 1;
       } finally {
         _currentBatchVendor = null;
@@ -3070,12 +3048,9 @@
       if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
       const n = (data.sent_to || []).length;
       if (data.status === 'empty') {
-        addMsg(`EMAIL ${kind.toUpperCase()} SKIP   store=${storeId} -- 0 orderable vendors in window`, 'sys');
+        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件: 无 vendor 可发`, 'sys');
       } else {
-        addMsg(
-          `EMAIL ${kind.toUpperCase()} OK     store=${storeId} sent_to=${JSON.stringify(data.sent_to || [])} vendors=${data.vendor_count}`,
-          'sys'
-        );
+        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件已发 (${n} 收件人, ${data.vendor_count} vendors)`, 'sys');
       }
       return data;
     } catch (e) {
@@ -3140,46 +3115,30 @@
         await loadVendors(storeId);
       }
 
-      // Mirror run_po_batch.cmd's CLI log so the UI's "show log" panel
-      // gives the same narrative the operator sees in
-      // logs/po_batch_cron_*.log when running offline -- PHASE banners
-      // around each kind, EMAIL events around each digest send.
-      addMsg('=' .repeat(50), 'sys');
-      addMsg(`STORE ${storeId}: ${label}`, 'sys');
-      addMsg('=' .repeat(50), 'sys');
-
       try {
         // ----- Phase 1: TRANSFER --------------------------------------
         _setBatchState('transfer');
-        addMsg(`PHASE TRANSFER START  store=${storeId} (${label})  vendors=${_batch.queueTransfer.length}`, 'sys');
         await _drainQueue(_batch.queueTransfer);
-        addMsg(`PHASE TRANSFER END    store=${storeId} (${label})  generated=${_batch.processed} vendors so far`, 'sys');
         _setBatchState('transfer-sending');
-        addMsg(`EMAIL TRANSFER SEND   store=${storeId} ...`, 'sys');
         await _sendDigestKind(storeId, 'transfer', _batch.startTs);
 
         // ----- Phase 2: ORDER -----------------------------------------
         _setBatchState('order');
-        addMsg(`PHASE ORDER START     store=${storeId} (${label})  vendors=${_batch.queueOrder.length}`, 'sys');
         await _drainQueue(_batch.queueOrder);
         _setBatchState('order-sending');
         // Reconcile: ad-hoc landed between drain-end and state switch?
         if (_batch.queueOrder.length > 0) {
           _setBatchState('order');
-          addMsg(`PHASE ORDER reconcile  store=${storeId}  ad-hoc tail +${_batch.queueOrder.length}`, 'sys');
           await _drainQueue(_batch.queueOrder);
           _setBatchState('order-sending');
         }
-        addMsg(`PHASE ORDER END       store=${storeId} (${label})  generated=${_batch.processed} total`, 'sys');
-        addMsg(`EMAIL ORDER SEND      store=${storeId} ...`, 'sys');
         await _sendDigestKind(storeId, 'order', _batch.startTs);
 
         addMsg(
-          `COMPLETE  ${label}  ok=${_batch.failed === 0}  ` +
-          `vendors=${_batch.processed}  failed=${_batch.failed}`,
+          `${label} batch 完成: ${_batch.processed - _batch.failed}/${_batch.processed} 生成, ` +
+          `${_batch.failed} 失败`,
           'sys'
         );
-        addMsg('=' .repeat(50), 'sys');
       } catch (e) {
         addMsg(`[X] ${label} batch 异常: ${e.message}`, 'sys');
       } finally {
