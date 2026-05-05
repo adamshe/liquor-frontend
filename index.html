@@ -3059,12 +3059,28 @@
     }
   }
 
+  // Outer "queue of batches" -- if Eliot is running and user clicks
+  // Briarwood, the second click parks the request here. When the
+  // current batch finishes, the worker pops the next entry and
+  // dispatches its own click -> the second batch fires automatically.
+  // Dedupe by store_id so double-clicking the same button does not
+  // schedule two duplicate batches.
+  const _pendingBatches = [];
+
   function _wireBatchBtn(btnId, storeId, label) {
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener('click', async () => {
       if (_batchInProgress_()) {
-        addMsg(`${label} batch 已在进行中`, 'sys');
+        if (_pendingBatches.some(p => p.storeId === storeId)) {
+          addMsg(`${label} batch 已在等待队列, 不重复加入`, 'sys');
+          return;
+        }
+        _pendingBatches.push({ storeId, label, btn });
+        const pos = _pendingBatches.length;
+        addMsg(`${label} batch 已加入等待队列 (位置 ${pos}, 当前 ${_batch.label} 跑完后启动)`, 'sys');
+        btn.disabled = true;
+        btn.innerHTML = `批量 ${label} 排队 #${pos}`;
         return;
       }
       if (generating) {
@@ -3148,8 +3164,23 @@
         btn.disabled = false;
         btn.innerHTML = _batch.origText;
         try { refreshBatchStatus(); } catch (_e) { /* ignore */ }
+        // Pop the next queued batch (if any) and dispatch its click.
+        // Re-entering the same handler is fine: _batchInProgress_()
+        // is now false so the next click takes the normal path.
+        if (_pendingBatches.length > 0) {
+          const next = _pendingBatches.shift();
+          addMsg(`接下来启动等待中的 ${next.label} batch`, 'sys');
+          // Restore the queued button's appearance before re-clicking
+          // so its own handler can flip disabled / innerHTML state.
+          next.btn.disabled = false;
+          next.btn.innerHTML = next.btn.dataset.origLabel || next.btn.innerHTML.replace(/\s*排队\s*#\d+/, '');
+          // Defer one tick so any UI cleanup has flushed.
+          setTimeout(() => next.btn.click(), 50);
+        }
       }
     });
+    // Stash the pristine label so the queue release can restore it
+    btn.dataset.origLabel = btn.innerHTML;
   }
   _wireBatchBtn('batchEliotBtn', '1', 'Eliot');
   _wireBatchBtn('batchBriarBtn', '2', 'Briarwood');
