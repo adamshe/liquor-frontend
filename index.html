@@ -3071,20 +3071,26 @@
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener('click', async () => {
+      // Disable IMMEDIATELY so a double-click can't queue twice / fire
+      // duplicate fetches during the resolver + confirm-dialog window.
+      // We restore on every early-return path below.
+      btn.disabled = true;
+
       if (_batchInProgress_()) {
         if (_pendingBatches.some(p => p.storeId === storeId)) {
           addMsg(`${label} batch 已在等待队列, 不重复加入`, 'sys');
+          // btn already disabled (queued state), keep it that way.
           return;
         }
         _pendingBatches.push({ storeId, label, btn });
         const pos = _pendingBatches.length;
         addMsg(`${label} batch 已加入等待队列 (位置 ${pos}, 当前 ${_batch.label} 跑完后启动)`, 'sys');
-        btn.disabled = true;
         btn.innerHTML = `批量 ${label} 排队 #${pos}`;
         return;
       }
       if (generating) {
         addMsg(`${label} batch: 当前正在生成, 请先取消`, 'sys');
+        btn.disabled = false;   // user must retry; restore
         return;
       }
       let resolved = [];
@@ -3095,10 +3101,12 @@
         resolved = (data.vendors || []).filter(v => v.vendor_id);
       } catch (e) {
         addMsg(`[X] ${label} batch_vendors 解析失败: ${e.message}`, 'sys');
+        btn.disabled = false;
         return;
       }
       if (!resolved.length) {
         addMsg(`[X] ${label}: batch_vendors 全部 NO MATCH (检查 stores.json)`, 'sys');
+        btn.disabled = false;
         return;
       }
       const transferList = resolved.filter(v => v.kind === 'transfer');
@@ -3111,9 +3119,12 @@
         `  -> 期间可从下拉 ad-hoc 加入此 queue (dedupe)\n` +
         `  -> queue 排空立即发 ORDER 邮件`
       );
-      if (!ok) return;
+      if (!ok) {
+        btn.disabled = false;
+        return;
+      }
 
-      // Init state machine
+      // Init state machine -- btn already disabled from the top guard.
       _batch.storeId = storeId;
       _batch.label = label;
       _batch.btn = btn;
@@ -3124,7 +3135,6 @@
       _batch.startTs = Date.now();
       _batch.processed = 0;
       _batch.failed = 0;
-      btn.disabled = true;
 
       if (storeSel.value !== storeId) {
         storeSel.value = storeId;
