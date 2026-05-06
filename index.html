@@ -3071,6 +3071,12 @@
     const btn = document.getElementById(btnId);
     if (!btn) return;
     btn.addEventListener('click', async () => {
+      // Diagnostic so we can confirm the click handler fired at all
+      // (matters most for iOS Safari, where some Failure modes are
+      // silent: popup blocker on confirm() after async, ITP cookie
+      // drop, etc.). Visible in the "show log" panel immediately.
+      addMsg(`[batch click] ${label}`, 'sys');
+
       // Disable IMMEDIATELY so a double-click can't queue twice / fire
       // duplicate fetches during the resolver + confirm-dialog window.
       // We restore on every early-return path below.
@@ -3093,6 +3099,19 @@
         btn.disabled = false;   // user must retry; restore
         return;
       }
+
+      // Confirm BEFORE any await -- iOS Safari treats user-gesture as
+      // "consumed" once the click handler crosses an async tick, then
+      // silently blocks confirm() (returns false, no dialog). Asking
+      // first while the gesture is fresh fixes the silent-no-op
+      // symptom on iPhone. Vendor list shown via addMsg post-fetch.
+      const ok = confirm(`确认: 两阶段批量 ${label}? (TRANSFER 先发, ORDER 后发)`);
+      if (!ok) {
+        addMsg(`${label} batch 取消`, 'sys');
+        btn.disabled = false;
+        return;
+      }
+
       let resolved = [];
       try {
         const r = await fetch(API_BASE + `/api/admin/po-batch/${storeId}/vendors`);
@@ -3111,18 +3130,12 @@
       }
       const transferList = resolved.filter(v => v.kind === 'transfer');
       const orderList = resolved.filter(v => v.kind !== 'transfer');
-      const ok = confirm(
-        `确认: 两阶段批量 ${label}\n` +
-        `Phase 1 TRANSFER (${transferList.length}): ${transferList.map(v => v.vendor_name).join(', ') || '(无)'}\n` +
-        `  -> 完成后立即发 TRANSFER 邮件\n` +
-        `Phase 2 ORDER (${orderList.length}): ${orderList.map(v => v.vendor_name).join(', ') || '(无)'}\n` +
-        `  -> 期间可从下拉 ad-hoc 加入此 queue (dedupe)\n` +
-        `  -> queue 排空立即发 ORDER 邮件`
+      // Log the resolved plan now that confirm has been accepted.
+      addMsg(
+        `${label} plan: TRANSFER ${transferList.length} (${transferList.map(v => v.vendor_name).join(', ') || '-'})  ` +
+        `ORDER ${orderList.length} (${orderList.map(v => v.vendor_name).join(', ') || '-'})`,
+        'sys'
       );
-      if (!ok) {
-        btn.disabled = false;
-        return;
-      }
 
       // Init state machine -- btn already disabled from the top guard.
       _batch.storeId = storeId;
