@@ -2074,7 +2074,18 @@
   function loadHistory() {
     try {
       const raw = localStorage.getItem(HISTORY_KEY);
-      _orderHistory = raw ? JSON.parse(raw) : [];
+      let parsed = raw ? JSON.parse(raw) : [];
+      // Defensive: an earlier React build (Zustand `persist`) wrote
+      // {state: {entries: [...]}, version: N} into this same key by
+      // mistake. Detect the wrapped shape and unwrap; if still not
+      // an array, reset to empty so .filter() etc. cannot crash the
+      // whole startup.
+      if (parsed && !Array.isArray(parsed) && parsed.state &&
+          Array.isArray(parsed.state.entries)) {
+        parsed = parsed.state.entries;
+      }
+      if (!Array.isArray(parsed)) parsed = [];
+      _orderHistory = parsed;
     } catch { _orderHistory = []; }
     renderHistory();
   }
@@ -2082,7 +2093,14 @@
   function loadPanel() {
     try {
       const raw = localStorage.getItem(PANEL_KEY);
-      const p = raw ? JSON.parse(raw) : null;
+      let p = raw ? JSON.parse(raw) : null;
+      // Same defensive unwrap as loadHistory: tolerate a Zustand
+      // {state: {vendors: [...]}, version: N} blob that an earlier
+      // React build may have written under this key.
+      if (p && !Array.isArray(p.vendors) && p.state &&
+          Array.isArray(p.state.vendors)) {
+        p = p.state;
+      }
       _poPanel = (p && Array.isArray(p.vendors)) ? p : { vendors: [] };
       console.log('[loadPanel] %d vendors restored from localStorage',
         _poPanel.vendors.length);
