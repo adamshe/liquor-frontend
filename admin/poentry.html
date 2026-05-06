@@ -108,10 +108,80 @@
   .audit-row .ts { color: var(--muted); }
   .audit-row .action { font-weight: 600; color: var(--accent); }
 
+  /* Errors panel: pin to top of detail scroll so OCR warnings stay
+     visible while user scrolls the line table below. Cap height +
+     scroll inside the panel so a flood of errors does not push the
+     table off-screen. */
   .errors { background: rgba(231,76,60,0.1); border: 1px solid var(--danger);
             color: var(--danger); padding: 8px 12px; border-radius: 4px;
-            margin-bottom: 12px; font-size: 12px; }
+            margin-bottom: 12px; font-size: 12px;
+            position: sticky; top: 0; z-index: 10;
+            max-height: 180px; overflow-y: auto;
+            line-height: 1.5; }
+  .errors::-webkit-scrollbar { width: 8px; }
+  .errors::-webkit-scrollbar-thumb { background: rgba(231,76,60,0.4); border-radius: 4px; }
   .confidence-low td { background: rgba(243,156,18,0.1); }
+
+  /* Chat-style OCR rescan panel: sticky to the bottom of the detail
+     scroll so the operator can keep the line table in view while
+     coaching Gemini with refinements. Hint history scrolls inside the
+     panel; textarea + send always visible. */
+  .chat-panel {
+    position: sticky; bottom: 0; z-index: 5;
+    background: var(--panel); border-top: 2px solid var(--accent);
+    padding: 10px 14px; margin: 16px -14px -14px;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.25);
+  }
+  .chat-panel-header {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; color: var(--muted); margin-bottom: 6px;
+  }
+  .chat-profile-badge {
+    font-weight: 600; padding: 2px 8px; border-radius: 10px;
+    background: var(--panel2); color: var(--accent);
+    font-size: 11px;
+  }
+  .chat-profile-badge.generic {
+    background: rgba(243,156,18,0.2); color: var(--warn);
+  }
+  .chat-history {
+    max-height: 130px; overflow-y: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 8px; margin-bottom: 6px;
+    font-size: 12px; line-height: 1.5;
+  }
+  .chat-history:empty::before {
+    content: '尚无 hint -- 在下方输入提示, 然后点 重新OCR';
+    color: var(--muted); font-style: italic;
+  }
+  .chat-bubble {
+    background: var(--panel2); padding: 4px 8px; border-radius: 4px;
+    margin-bottom: 4px;
+    border-left: 2px solid var(--accent);
+  }
+  .chat-bubble .ts {
+    color: var(--muted); font-size: 10px; margin-right: 6px;
+  }
+  .chat-input-row { display: flex; gap: 6px; }
+  .chat-input-row textarea {
+    flex: 1; resize: vertical; min-height: 42px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 6px 8px; font: inherit; font-size: 12px;
+  }
+  .chat-send-btn {
+    padding: 0 16px; background: var(--accent); color: white;
+    border: none; border-radius: 4px; cursor: pointer; font-weight: 600;
+    white-space: nowrap; font-size: 12px;
+  }
+  .chat-send-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .chat-status {
+    font-size: 11px; color: var(--muted); margin-top: 4px; min-height: 14px;
+  }
+  .chat-status.busy { color: var(--warn); }
+  .chat-status.error { color: var(--danger); }
+  .chat-status.success { color: var(--success); }
 
   .empty { color: var(--muted); text-align: center; padding: 40px 20px; font-style: italic; }
 
@@ -328,6 +398,47 @@
       ? `<div class="errors">⚠ ${preview.errors.map(esc).join(' · ')}</div>`
       : '';
 
+    // Chat-style rescan panel: only meaningful while the draft is editable
+    // (no point re-OCRing a committed draft). Hides itself entirely after
+    // commit so the audit trail visual stays clean.
+    let _hintsArr = [];
+    if (d.ocr_hints) {
+      try { const p = JSON.parse(d.ocr_hints); if (Array.isArray(p)) _hintsArr = p; }
+      catch (_e) { /* corrupt -- treat as empty */ }
+    }
+    const hintsHtml = _hintsArr.map(h =>
+      `<div class="chat-bubble">
+        <span class="ts">${fmtTs((h.ts || 0) * 1000)}</span>
+        <span>${esc(h.text || '')}</span>
+      </div>`
+    ).join('');
+    // Profile badge: shows what vendor profile last rescan used. On first
+    // load we don't know yet (haven't called rescan), so show vendor name
+    // and label generic until the first rescan response confirms otherwise.
+    const profileLabel = esc(d.vendor_name || '未识别供应商');
+    const chatPanelHtml = (d.image_path && editable) ? `
+      <div class="chat-panel" data-draft-id="${esc(d.draft_id)}">
+        <div class="chat-panel-header">
+          <span>给 LLM 加 hint -> 重新 OCR 这张发票 (Cmd/Ctrl+Enter 发送)</span>
+          <span class="chat-profile-badge" id="chatProfileBadge">${profileLabel}</span>
+        </div>
+        <div class="chat-history" id="chatHistory">${hintsHtml}</div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" rows="2"
+            placeholder="例: 这是 Empire 发票, 最左列手写的数字是 cases. 不要用 LINE# 列. BELLISSIMA 是 6 瓶/箱."
+            ></textarea>
+          <button class="chat-send-btn" id="chatSendBtn">重新 OCR</button>
+        </div>
+        <div class="chat-status" id="chatStatus"></div>
+      </div>
+    ` : (editable ? `
+      <div class="chat-panel">
+        <div class="chat-panel-header">
+          <span style="color:var(--muted);font-style:italic;">原始发票图未持久化, rescan 不可用 (此草稿在 image-persist 上线前创建; 重新上传可恢复)</span>
+        </div>
+      </div>
+    ` : '');
+
     const linesHtml = d.lines.map((ln, i) => {
       const lowConf = (ln.confidence ?? 1) < 0.85;
       const unresolved = !ln.product_id;
@@ -500,7 +611,58 @@
           }
         </div>
       </div>
+
+      ${chatPanelHtml}
     `;
+
+    // Chat rescan: send hint + reload draft when LLM returns. Wraps the
+    // entire round-trip in a busy/error/success status line because
+    // Gemini latency is 5-20s -- silence here is bug-bait.
+    const _chatSendBtn = $('#chatSendBtn');
+    if (_chatSendBtn) {
+      const _doRescan = async () => {
+        const inp = $('#chatInput');
+        const status = $('#chatStatus');
+        const badge = $('#chatProfileBadge');
+        const hint = (inp?.value || '').trim();
+        _chatSendBtn.disabled = true;
+        status.className = 'chat-status busy';
+        status.textContent = '正在重新 OCR (10-20 秒)...';
+        try {
+          const r = await fetch(`/api/admin/po-drafts/${d.draft_id}/rescan`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({hint, actor: 'admin'}),
+          });
+          if (!r.ok) {
+            const err = await r.text();
+            throw new Error(`${r.status} ${err.slice(0, 200)}`);
+          }
+          const result = await r.json();
+          status.className = 'chat-status success';
+          status.textContent = `OCR 完成 (profile=${result.vendor_profile}, ${result.lines_count} 行). 加载中...`;
+          if (badge) {
+            badge.textContent = result.vendor_profile_display || result.vendor_profile || '?';
+            badge.classList.toggle('generic', !!result.is_generic_profile);
+          }
+          inp.value = '';
+          await loadList();
+          await loadDetail(d.draft_id);
+        } catch (e) {
+          status.className = 'chat-status error';
+          status.textContent = '失败: ' + (e.message || e);
+        } finally {
+          _chatSendBtn.disabled = false;
+        }
+      };
+      _chatSendBtn.addEventListener('click', _doRescan);
+      $('#chatInput')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          _doRescan();
+        }
+      });
+    }
 
     $('#btnEditSave')?.addEventListener('click', () => saveEdits(d));
     $('#btnApprove')?.addEventListener('click', () => doAction('approve'));
@@ -615,6 +777,13 @@
       window.createProductAutocomplete({
         input: inp,
         dropdown: dropdown,
+        // OCR mismatch is the common case here -- Stacy needs to scan all
+        // candidates, not type-and-match. minChars=0 + focus refresh =
+        // popup opens with full list on click; typing filters live.
+        // limit bumped from 12 to 50 so the catalog browse is usable
+        // without forcing a query.
+        minChars: 0,
+        limit: 50,
         getItems: () => _getCatalog(draft.store_id),
         onSelect: async (item) => {
           // Update the two inputs for this row: name + product_id

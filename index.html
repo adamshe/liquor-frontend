@@ -2879,102 +2879,39 @@
     }
   });
 
-  // ── Per-store batch: walk batch_vendors[] one-by-one, programmatically
-  //    setting the dropdowns + firing generatePO each iteration. This
-  //    makes the live PO panel stream identically to the user manually
-  //    selecting each vendor; the difference is just that the click
-  //    happens automatically. After every vendor finishes, hit
-  //    /admin/po-digest/<store_id> to email the grouped ORDER + TRANSFER
-  //    digest.
-  // Authoritative {vid, name} hint that the batch worker writes BEFORE
-  // calling generatePO each iteration. generatePO reads it (when set)
-  // instead of re-deriving the name from vendorSel.selectedOptions
-  // -- the dropdown's DOM state can race with the worker's value=
-  // assignment and the streaming area / onDone entry would otherwise
-  // pick up vendor_id (a hash) instead of the human name.
-  let _currentBatchVendor = null;
+  // ── Per-store batch (SERVER-SIDE QUEUE design) ────────────────────
+  // The batch + email pipeline runs in the uvicorn worker. The browser
+  // is a thin client: clicks POST /api/po-queue/enqueue, then a per-task
+  // WebSocket on /ws/queue-task/<id> streams progress events into the
+  // log panel. A second WS on /ws/queue-events keeps every browser in
+  // cross-browser sync (PC + iPhone show the same dot indicators and
+  // queue state without polling).
+  //
+  // Dedupe is server-side: at most one active task per (store_id, kind,
+  // day_iso). A duplicate click returns 409 and we attach to the
+  // existing task instead of starting a new one.
 
-  // ── Order-gen queue mechanism (two-phase) ────────────────────────
-  // State machine for one per-store batch run:
-  //   idle              -- no batch active
-  //   transfer          -- worker draining queueTransfer (FIFO, fixed
-  //                        from config). Ad-hoc dropdown picks land in
-  //                        queueOrder (NOT queueTransfer -- transfer set
-  //                        is config-fixed, time-critical).
-  //   transfer-sending  -- transfer queue empty, sending TRANSFER email
-  //   order             -- worker draining queueOrder; ad-hoc adds OK
-  //   order-sending     -- order queue empty, reconciling + sending
-  //                        ORDER email. If a late ad-hoc landed before
-  //                        the send, re-drain.
-  //   done              -- both emails sent; flip back to idle
-  const _batch = {
-    state: 'idle',
-    storeId: null,
-    queueTransfer: [],   // FIFO, drained in transfer phase
-    queueOrder: [],      // FIFO, drained in order phase, mutable via ad-hoc
-    seen: new Set(),     // dedupe by vendor_id across BOTH queues
-    startTs: 0,          // ms epoch -- sliding-window lower bound
-    processed: 0,
-    failed: 0,
-    label: '',
-    btn: null,
-    origText: '',
-  };
+  let _currentBatchVendor = null;   // hint set by event handler before
+                                    // generatePO is fired manually in
+                                    // legacy single-vendor flow (kept).
+
+  // Per-store live batch view, keyed by store_id. Updated by WS events.
+  // { '1': { taskId, status, btn, origText, total, transferDone, orderDone } }
+  const _serverBatch = {};
+
   function _batchInProgress_() {
-    return ['transfer','transfer-sending','order','order-sending'].includes(_batch.state);
+    return Object.values(_serverBatch).some(s =>
+      s && s.status && ['queued', 'running'].includes(s.status));
   }
-  // Backward compat for generatePO onDone email suppression
   let _batchInProgress = false;
-  function _setBatchState(next) {
-    _batch.state = next;
+  function _refreshBatchInProgressFlag() {
     _batchInProgress = _batchInProgress_();
   }
 
-  function _totalQueueLen() {
-    return _batch.queueTransfer.length + _batch.queueOrder.length;
-  }
-  function _renderQueueLabel() {
-    if (!_batch.btn) return;
-    const total = _batch.processed + _totalQueueLen();
-    const phase = _batch.state === 'transfer' ? 'T'
-                : _batch.state === 'order' ? 'O'
-                : _batch.state.includes('sending') ? 'send' : '';
-    _batch.btn.innerHTML = `批量 ${_batch.label} ${_batch.processed}/${total}${phase ? ' ' + phase : ''}`;
-  }
-
-  // Ad-hoc enqueue: only goes to queueOrder. Allowed during transfer
-  // / transfer-sending / order phases. Dedupes by vendor_id.
-  function _enqueueAdhoc(vid, name) {
-    if (!vid) return false;
-    if (_batch.seen.has(vid)) {
-      addMsg(`ad-hoc dedupe: ${name} 已在 queue`, 'sys');
-      return false;
-    }
-    if (!['transfer','transfer-sending','order'].includes(_batch.state)) {
-      return false;  // order-sending / done / idle
-    }
-    _batch.seen.add(vid);
-    _batch.queueOrder.push({vendor_id: vid, vendor_name: name || vid, kind: 'order'});
-    addMsg(`ad-hoc 入 ORDER queue: ${name} (剩 ${_batch.queueOrder.length})`, 'sys');
-    _renderQueueLabel();
-    return true;
-  }
-  window._enqueueAdhoc = _enqueueAdhoc;
-
-  function _waitForGenComplete(hardTimeoutMs) {
-    return new Promise((resolve, reject) => {
-      const t0 = Date.now();
-      const tick = setInterval(() => {
-        if (!generating) { clearInterval(tick); resolve(); return; }
-        if (Date.now() - t0 > hardTimeoutMs) {
-          clearInterval(tick); reject(new Error('gen hard timeout'));
-        }
-      }, 250);
-    });
-  }
-
   // Persist a single completed gen to backend preorders.json so the
-  // digest's sliding-window filter sees it. Fire-and-forget.
+  // digest's sliding-window filter sees it. Fire-and-forget. Still
+  // used by the manual single-vendor generatePO flow (NOT by batch --
+  // batch persists server-side via preorder_store.upsert).
   async function _persistPreorder(entry) {
     try {
       const r = await fetch(API_BASE + '/api/admin/preorders/upsert', {
@@ -2999,214 +2936,303 @@
   }
   window._persistPreorder = _persistPreorder;
 
-  // Drain an array reference until empty. Caller picks queueTransfer or
-  // queueOrder. ad-hoc may grow queueOrder mid-loop (we read .length
-  // each iteration so additions are picked up).
-  async function _drainQueue(queueRef) {
-    const HARD_TIMEOUT_MS = 15 * 60 * 1000;
-    while (queueRef.length > 0) {
-      const v = queueRef.shift();
-      _renderQueueLabel();
-      addMsg(`[${_batch.processed + 1}] ${_batch.label} -> ${v.vendor_name} (${v.kind})`, 'sys');
-      if (!Array.from(vendorSel.options).some(o => o.value === v.vendor_id)) {
-        addMsg(`  vendor ${v.vendor_name} (${v.vendor_id}) 不在下拉, 跳过`, 'sys');
-        _batch.failed += 1;
-        _batch.processed += 1;
-        continue;
-      }
-      _currentBatchVendor = {
-        storeId: _batch.storeId,
-        storeName: storeSel.selectedOptions[0]?.text || _batch.storeId,
-        vendorId: v.vendor_id,
-        vendorName: v.vendor_name,
-      };
-      vendorSel.value = v.vendor_id;
-      try {
-        generatePO();
-        await _waitForGenComplete(HARD_TIMEOUT_MS);
-        // generatePO onDone calls _persistPreorder for us
-      } catch (e) {
-        addMsg(`  ${v.vendor_name} 生成异常: ${e.message}`, 'sys');
-        _batch.failed += 1;
-      } finally {
-        _currentBatchVendor = null;
-      }
-      _batch.processed += 1;
-      _renderQueueLabel();
+  // ----- Per-task WebSocket: render events into the log panel --------
+  function _renderBatchBtn(storeId) {
+    const s = _serverBatch[storeId];
+    if (!s || !s.btn) return;
+    if (!s.status || s.status === 'done' || s.status === 'failed' || s.status === 'cancelled') {
+      s.btn.disabled = false;
+      s.btn.innerHTML = s.origText;
+      return;
+    }
+    s.btn.disabled = true;
+    const label = s.label || '';
+    if (s.status === 'queued') {
+      s.btn.innerHTML = `批量 ${label} 排队中`;
+    } else {
+      const phase = s.phase || '';
+      const done = s.vendorDone || 0;
+      const total = s.vendorTotal || 0;
+      const tag = phase ? ` ${phase[0].toUpperCase()}` : '';
+      s.btn.innerHTML = total ? `批量 ${label} ${done}/${total}${tag}` : `批量 ${label}${tag}`;
     }
   }
 
-  // POST one digest kind. Returns the {sent_to, vendor_count, ...} body
-  // or {} on failure (already addMsg'd).
-  async function _sendDigestKind(storeId, kind, sinceMs) {
+  // Per-task WebSocket lifecycle. Reconnects on drop. Closes when the
+  // task hits a terminal state.
+  function _attachTaskWS(storeId, taskId) {
+    const s = _serverBatch[storeId];
+    if (!s) return;
+    if (s.ws) {
+      try { s.ws.close(); } catch (_) {}
+    }
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws/queue-task/${taskId}`;
+    let terminal = false;
+    let ws;
     try {
-      const r = await fetch(
-        API_BASE + `/api/admin/po-digest/${storeId}/${kind}?since_ms=${sinceMs}`,
-        { method: 'POST' }
-      );
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-      const n = (data.sent_to || []).length;
-      if (data.status === 'empty') {
-        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件: 无 vendor 可发`, 'sys');
-      } else {
-        addMsg(`${_batch.label} ${kind.toUpperCase()} 邮件已发 (${n} 收件人, ${data.vendor_count} vendors)`, 'sys');
-      }
-      return data;
+      ws = new WebSocket(url);
     } catch (e) {
-      addMsg(`[X] ${_batch.label} ${kind.toUpperCase()} 邮件失败: ${e.message}`, 'sys');
-      return {};
+      addMsg(`[!] 无法打开任务 WS: ${e.message}`, 'sys');
+      return;
     }
+    s.ws = ws;
+    ws.onopen = () => { /* server sends task_status immediately */ };
+    ws.onmessage = (ev) => {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (!msg || msg.type === 'heartbeat') return;
+      const label = s.label || storeId;
+      switch (msg.type) {
+        case 'task_status':
+          if (msg.task) {
+            s.status = msg.task.status;
+            _renderBatchBtn(storeId);
+            _refreshBatchInProgressFlag();
+          }
+          break;
+        case 'task_started':
+          s.status = 'running';
+          addMsg(`${label} batch 启动 (task=${taskId.slice(0,8)})`, 'sys');
+          _renderBatchBtn(storeId);
+          _refreshBatchInProgressFlag();
+          break;
+        case 'phase_start':
+          s.phase = msg.phase;
+          addMsg(`${label} ${(msg.phase || '').toUpperCase()} 阶段开始`, 'sys');
+          _renderBatchBtn(storeId);
+          break;
+        case 'vendor_start':
+          s.vendorTotal = msg.total || s.vendorTotal || 0;
+          s.vendorDone = (msg.idx ? msg.idx - 1 : (s.vendorDone || 0));
+          addMsg(`[${msg.idx || '?'}/${msg.total || '?'}] ${label} -> ${msg.vendor_name || msg.vendor_id} (${msg.phase || '?'})`, 'sys');
+          _renderBatchBtn(storeId);
+          break;
+        case 'vendor_done':
+          s.vendorDone = msg.idx || ((s.vendorDone || 0) + 1);
+          addMsg(`  ${msg.vendor_name || msg.vendor_id} 完成 cases=${msg.cases || 0} 用时=${msg.elapsed_s || 0}s`, 'sys');
+          _renderBatchBtn(storeId);
+          break;
+        case 'vendor_failed':
+          addMsg(`  [!] ${msg.vendor_name || msg.vendor_id} 失败: ${msg.error || ''}`, 'sys');
+          break;
+        case 'phase_done':
+          addMsg(`${label} ${(msg.phase || '').toUpperCase()} 阶段结束 vendors=${msg.vendor_count || 0}`, 'sys');
+          break;
+        case 'email_sent':
+          addMsg(`${label} ${(msg.kind || '').toUpperCase()} 邮件已发 (${(msg.recipients || []).length} 收件人, ${msg.vendor_count || 0} vendors)`, 'sys');
+          break;
+        case 'task_done':
+          terminal = true;
+          s.status = 'done';
+          addMsg(`${label} batch 完成`, 'sys');
+          try { refreshBatchStatus(); } catch (_) {}
+          _renderBatchBtn(storeId);
+          _refreshBatchInProgressFlag();
+          break;
+        case 'task_failed':
+          terminal = true;
+          s.status = 'failed';
+          addMsg(`[X] ${label} batch 失败: ${msg.error || ''}`, 'sys');
+          _renderBatchBtn(storeId);
+          _refreshBatchInProgressFlag();
+          break;
+        case 'task_cancelled':
+          terminal = true;
+          s.status = 'cancelled';
+          addMsg(`${label} batch 已取消`, 'sys');
+          _renderBatchBtn(storeId);
+          _refreshBatchInProgressFlag();
+          break;
+      }
+      if (terminal) {
+        try { ws.close(); } catch (_) {}
+      }
+    };
+    ws.onclose = () => {
+      if (s.ws === ws) s.ws = null;
+      // If task is still active (e.g. iOS Safari sleep killed the WS),
+      // reattach after a short backoff. The server's snapshot endpoint
+      // gives us the catch-up; here we just reopen.
+      if (!terminal && s.status && ['queued', 'running'].includes(s.status)) {
+        setTimeout(() => _attachTaskWS(storeId, taskId), 1500);
+      }
+    };
+    ws.onerror = () => { /* onclose handles retry */ };
   }
 
-  // Outer "queue of batches" -- if Eliot is running and user clicks
-  // Briarwood, the second click parks the request here. When the
-  // current batch finishes, the worker pops the next entry and
-  // dispatches its own click -> the second batch fires automatically.
-  // Dedupe by store_id so double-clicking the same button does not
-  // schedule two duplicate batches.
-  const _pendingBatches = [];
+  // ----- POST /api/po-queue/enqueue + open per-task WS ---------------
+  async function _enqueueAndAttach(storeId, label, btn) {
+    const s = _serverBatch[storeId] = _serverBatch[storeId] || {};
+    s.label = label;
+    s.btn = btn;
+    s.origText = btn.dataset.origLabel || btn.innerHTML;
+
+    let r;
+    try {
+      r = await fetch(API_BASE + '/api/po-queue/enqueue', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ store_id: storeId, kind: 'batch', source: 'ui' }),
+      });
+    } catch (e) {
+      addMsg(`[X] ${label} 入队失败 (网络): ${e.message}`, 'sys');
+      btn.disabled = false;
+      return;
+    }
+    let body = {};
+    try { body = await r.json(); } catch (_) {}
+    if (r.status === 200) {
+      s.taskId = body.task_id;
+      s.status = body.status || 'queued';
+      addMsg(`${label} batch 已入队 (task=${s.taskId.slice(0,8)})`, 'sys');
+      _renderBatchBtn(storeId);
+      _refreshBatchInProgressFlag();
+      _attachTaskWS(storeId, s.taskId);
+      return;
+    }
+    if (r.status === 409) {
+      const detail = body.detail || {};
+      const tid = detail.task_id;
+      if (!tid) {
+        addMsg(`[X] ${label} 入队冲突但无 task_id: ${JSON.stringify(detail)}`, 'sys');
+        btn.disabled = false;
+        return;
+      }
+      s.taskId = tid;
+      s.status = detail.status || 'running';
+      addMsg(`${label} batch 已在运行 (task=${tid.slice(0,8)} status=${s.status}), 接入实时流`, 'sys');
+      _renderBatchBtn(storeId);
+      _refreshBatchInProgressFlag();
+      _attachTaskWS(storeId, tid);
+      return;
+    }
+    addMsg(`[X] ${label} 入队失败 status=${r.status}: ${JSON.stringify(body).slice(0,200)}`, 'sys');
+    btn.disabled = false;
+  }
 
   function _wireBatchBtn(btnId, storeId, label) {
     const btn = document.getElementById(btnId);
     if (!btn) return;
-    btn.addEventListener('click', async () => {
-      // Diagnostic so we can confirm the click handler fired at all
-      // (matters most for iOS Safari, where some Failure modes are
-      // silent: popup blocker on confirm() after async, ITP cookie
-      // drop, etc.). Visible in the "show log" panel immediately.
+    btn.dataset.origLabel = btn.innerHTML;
+    btn.addEventListener('click', () => {
+      // Diagnostic visible in the log panel even on iOS Safari.
       addMsg(`[batch click] ${label}`, 'sys');
-
-      // Disable IMMEDIATELY so a double-click can't queue twice / fire
-      // duplicate fetches during the resolver + confirm-dialog window.
-      // We restore on every early-return path below.
       btn.disabled = true;
-
-      if (_batchInProgress_()) {
-        if (_pendingBatches.some(p => p.storeId === storeId)) {
-          addMsg(`${label} batch 已在等待队列, 不重复加入`, 'sys');
-          // btn already disabled (queued state), keep it that way.
-          return;
-        }
-        _pendingBatches.push({ storeId, label, btn });
-        const pos = _pendingBatches.length;
-        addMsg(`${label} batch 已加入等待队列 (位置 ${pos}, 当前 ${_batch.label} 跑完后启动)`, 'sys');
-        btn.innerHTML = `批量 ${label} 排队 #${pos}`;
-        return;
-      }
-      if (generating) {
-        addMsg(`${label} batch: 当前正在生成, 请先取消`, 'sys');
-        btn.disabled = false;   // user must retry; restore
-        return;
-      }
-
-      // Confirm BEFORE any await -- iOS Safari treats user-gesture as
-      // "consumed" once the click handler crosses an async tick, then
-      // silently blocks confirm() (returns false, no dialog). Asking
-      // first while the gesture is fresh fixes the silent-no-op
-      // symptom on iPhone. Vendor list shown via addMsg post-fetch.
+      // Confirm BEFORE any await -- iOS Safari consumes user gesture
+      // on the first async tick, then silently blocks confirm().
       const ok = confirm(`确认: 两阶段批量 ${label}? (TRANSFER 先发, ORDER 后发)`);
       if (!ok) {
         addMsg(`${label} batch 取消`, 'sys');
         btn.disabled = false;
         return;
       }
-
-      let resolved = [];
-      try {
-        const r = await fetch(API_BASE + `/api/admin/po-batch/${storeId}/vendors`);
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-        resolved = (data.vendors || []).filter(v => v.vendor_id);
-      } catch (e) {
-        addMsg(`[X] ${label} batch_vendors 解析失败: ${e.message}`, 'sys');
-        btn.disabled = false;
-        return;
-      }
-      if (!resolved.length) {
-        addMsg(`[X] ${label}: batch_vendors 全部 NO MATCH (检查 stores.json)`, 'sys');
-        btn.disabled = false;
-        return;
-      }
-      const transferList = resolved.filter(v => v.kind === 'transfer');
-      const orderList = resolved.filter(v => v.kind !== 'transfer');
-      // Log the resolved plan now that confirm has been accepted.
-      addMsg(
-        `${label} plan: TRANSFER ${transferList.length} (${transferList.map(v => v.vendor_name).join(', ') || '-'})  ` +
-        `ORDER ${orderList.length} (${orderList.map(v => v.vendor_name).join(', ') || '-'})`,
-        'sys'
-      );
-
-      // Init state machine -- btn already disabled from the top guard.
-      _batch.storeId = storeId;
-      _batch.label = label;
-      _batch.btn = btn;
-      _batch.origText = btn.innerHTML;
-      _batch.queueTransfer = transferList.slice();
-      _batch.queueOrder = orderList.slice();
-      _batch.seen = new Set(resolved.map(v => v.vendor_id));
-      _batch.startTs = Date.now();
-      _batch.processed = 0;
-      _batch.failed = 0;
-
-      if (storeSel.value !== storeId) {
-        storeSel.value = storeId;
-        await loadVendors(storeId);
-      }
-
-      try {
-        // ----- Phase 1: TRANSFER --------------------------------------
-        _setBatchState('transfer');
-        await _drainQueue(_batch.queueTransfer);
-        _setBatchState('transfer-sending');
-        await _sendDigestKind(storeId, 'transfer', _batch.startTs);
-
-        // ----- Phase 2: ORDER -----------------------------------------
-        _setBatchState('order');
-        await _drainQueue(_batch.queueOrder);
-        _setBatchState('order-sending');
-        // Reconcile: ad-hoc landed between drain-end and state switch?
-        if (_batch.queueOrder.length > 0) {
-          _setBatchState('order');
-          await _drainQueue(_batch.queueOrder);
-          _setBatchState('order-sending');
-        }
-        await _sendDigestKind(storeId, 'order', _batch.startTs);
-
-        addMsg(
-          `${label} batch 完成: ${_batch.processed - _batch.failed}/${_batch.processed} 生成, ` +
-          `${_batch.failed} 失败`,
-          'sys'
-        );
-      } catch (e) {
-        addMsg(`[X] ${label} batch 异常: ${e.message}`, 'sys');
-      } finally {
-        _setBatchState('done');
-        _setBatchState('idle');
-        _batch.btn = null;
-        btn.disabled = false;
-        btn.innerHTML = _batch.origText;
-        try { refreshBatchStatus(); } catch (_e) { /* ignore */ }
-        // Pop the next queued batch (if any) and dispatch its click.
-        // Re-entering the same handler is fine: _batchInProgress_()
-        // is now false so the next click takes the normal path.
-        if (_pendingBatches.length > 0) {
-          const next = _pendingBatches.shift();
-          addMsg(`接下来启动等待中的 ${next.label} batch`, 'sys');
-          // Restore the queued button's appearance before re-clicking
-          // so its own handler can flip disabled / innerHTML state.
-          next.btn.disabled = false;
-          next.btn.innerHTML = next.btn.dataset.origLabel || next.btn.innerHTML.replace(/\s*排队\s*#\d+/, '');
-          // Defer one tick so any UI cleanup has flushed.
-          setTimeout(() => next.btn.click(), 50);
-        }
-      }
+      _enqueueAndAttach(storeId, label, btn);
     });
-    // Stash the pristine label so the queue release can restore it
-    btn.dataset.origLabel = btn.innerHTML;
   }
   _wireBatchBtn('batchEliotBtn', '1', 'Eliot');
   _wireBatchBtn('batchBriarBtn', '2', 'Briarwood');
+
+  // ----- On page load: attach to any active server-side tasks --------
+  // PC opens browser at 9am, iPhone opens at 10am, both find the
+  // already-running batch and stream the same events. /ws/queue-events
+  // additionally tells idle browsers when ANY task starts so dot
+  // indicators flip without polling.
+  async function _attachToActiveTasks() {
+    let tasks = [];
+    try {
+      const r = await fetch(API_BASE + '/api/po-queue/list');
+      if (!r.ok) return;
+      const data = await r.json();
+      tasks = data.tasks || [];
+    } catch (_) { return; }
+    for (const t of tasks) {
+      if (!['queued', 'running'].includes(t.status)) continue;
+      if (t.kind !== 'batch') continue;
+      const sid = String(t.store_id);
+      const btnId = sid === '1' ? 'batchEliotBtn' : (sid === '2' ? 'batchBriarBtn' : null);
+      const labelMap = { '1': 'Eliot', '2': 'Briarwood' };
+      const btn = btnId ? document.getElementById(btnId) : null;
+      if (!btn) continue;
+      const s = _serverBatch[sid] = _serverBatch[sid] || {};
+      s.label = labelMap[sid] || sid;
+      s.btn = btn;
+      s.origText = btn.dataset.origLabel || btn.innerHTML;
+      s.taskId = t.task_id;
+      s.status = t.status;
+      _renderBatchBtn(sid);
+      _refreshBatchInProgressFlag();
+      _attachTaskWS(sid, t.task_id);
+    }
+  }
+
+  // ----- Global cross-browser sync via /ws/queue-events --------------
+  let _globalQueueWS = null;
+  function _connectGlobalQueueWS() {
+    if (_globalQueueWS && _globalQueueWS.readyState <= 1) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws/queue-events`;
+    let ws;
+    try { ws = new WebSocket(url); }
+    catch (_) { setTimeout(_connectGlobalQueueWS, 5000); return; }
+    _globalQueueWS = ws;
+    ws.onmessage = (ev) => {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (!msg || msg.type === 'heartbeat') return;
+      // Cross-browser: another browser kicked off a batch -> attach so
+      // we see the same live progress.
+      if (msg.type === 'task_started' && msg.kind === 'batch') {
+        const sid = String(msg.store_id);
+        const labelMap = { '1': 'Eliot', '2': 'Briarwood' };
+        const btnId = sid === '1' ? 'batchEliotBtn' : (sid === '2' ? 'batchBriarBtn' : null);
+        const btn = btnId ? document.getElementById(btnId) : null;
+        if (btn && (!_serverBatch[sid] || _serverBatch[sid].taskId !== msg.task_id)) {
+          const s = _serverBatch[sid] = _serverBatch[sid] || {};
+          s.label = labelMap[sid] || sid;
+          s.btn = btn;
+          s.origText = btn.dataset.origLabel || btn.innerHTML;
+          s.taskId = msg.task_id;
+          s.status = 'running';
+          addMsg(`(其它端) ${s.label} batch 已启动, 接入实时流`, 'sys');
+          _renderBatchBtn(sid);
+          _refreshBatchInProgressFlag();
+          _attachTaskWS(sid, msg.task_id);
+        }
+      } else if (msg.type === 'preorder_upserted') {
+        // Server persisted a vendor PO: refresh local panel so the
+        // other browser's typing shows up here too.
+        try { typeof renderPOPanel === 'function' && renderPOPanel(); } catch (_) {}
+        try { typeof loadPreordersList === 'function' && loadPreordersList(); } catch (_) {}
+      } else if (msg.type === 'email_sent') {
+        try { refreshBatchStatus(); } catch (_) {}
+      }
+    };
+    ws.onclose = () => {
+      _globalQueueWS = null;
+      setTimeout(_connectGlobalQueueWS, 3000);
+    };
+    ws.onerror = () => { /* onclose handles retry */ };
+  }
+
+  // iOS Safari kills WebSockets on lock-screen / tab-background. On
+  // resume we proactively reopen.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!_globalQueueWS || _globalQueueWS.readyState > 1) {
+      _connectGlobalQueueWS();
+    }
+    for (const sid of Object.keys(_serverBatch)) {
+      const s = _serverBatch[sid];
+      if (s && s.taskId && (!s.ws || s.ws.readyState > 1) &&
+          ['queued', 'running'].includes(s.status || '')) {
+        _attachTaskWS(sid, s.taskId);
+      }
+    }
+  });
+
+  _attachToActiveTasks();
+  _connectGlobalQueueWS();
 
   // ── Daily batch status indicator (green = today's run sent OK,
   //    yellow = not sent yet today / failed). Polls /admin/po-batch-status
@@ -4039,12 +4065,15 @@
   vendorSel.addEventListener('change', () => {
     sessionId = null;
     if (!vendorSel.value || !storeSel.value) return;
-    // Batch running: vendor pick joins the queue (deduped) instead of
-    // racing against the worker's in-flight gen. Worker drains the
-    // queue before the digest send -- the new pick gets included.
-    if (_batchInProgress_ && _batchInProgress_() && storeSel.value === _batch.storeId) {
+    // Batch running on this store: a manual vendor pick would race
+    // the server worker, so we just notify the user and bail. The
+    // server's batch_active_for_store check would also reject a
+    // /api/po-queue/enqueue here with 409, but skipping the click
+    // avoids the round-trip and keeps the UI snappy.
+    const sBatch = _serverBatch[storeSel.value];
+    if (sBatch && ['queued', 'running'].includes(sBatch.status || '')) {
       const text = vendorSel.selectedOptions[0]?.text || vendorSel.value;
-      _enqueueAdhoc(vendorSel.value, text, 'order');
+      addMsg(`${sBatch.label || storeSel.value} batch 进行中, ${text} 将由 worker 处理`, 'sys');
       return;
     }
     generatePO();
