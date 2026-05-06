@@ -2966,8 +2966,13 @@
     if (s.ws) {
       try { s.ws.close(); } catch (_) {}
     }
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/queue-task/${taskId}`;
+    // Cross-origin aware: when the page is on ui-lo.* (static host),
+    // WS_BASE points to api-lo.* (uvicorn). Same-origin (lo.* / dev)
+    // falls back to location.host. location.host alone would always
+    // hit the static host, which has no WS upgrade -> fail.
+    const url = WS_BASE
+      ? `${WS_BASE}/ws/queue-task/${taskId}`
+      : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/queue-task/${taskId}`;
     let terminal = false;
     let ws;
     try {
@@ -3170,8 +3175,9 @@
   let _globalQueueWS = null;
   function _connectGlobalQueueWS() {
     if (_globalQueueWS && _globalQueueWS.readyState <= 1) return;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/queue-events`;
+    const url = WS_BASE
+      ? `${WS_BASE}/ws/queue-events`
+      : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/queue-events`;
     let ws;
     try { ws = new WebSocket(url); }
     catch (_) { setTimeout(_connectGlobalQueueWS, 5000); return; }
