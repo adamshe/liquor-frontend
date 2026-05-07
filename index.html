@@ -1485,16 +1485,41 @@
     _applyUILocks();
   };
 
+  // Per-store transfer_vendors patterns, populated by loadStores. Used
+  // by emailSendForVendor to decide if a vendor is an internal-store
+  // transfer (Briarwood / Long Happy for Eliot; Wai M / Chong Qing for
+  // Briarwood) vs an outside ORDER vendor. Matters because each vendor
+  // gets exactly ONE email, of the right kind.
+  const _transferPatternsByStore = {};
   async function loadStores() {
     try {
       const r = await fetch(API_BASE + '/api/stores');
       const stores = await r.json();
       storeSel.innerHTML = `<option value="" data-i18n="store.select">${t('store.select')}</option>` +
         stores.map(s => `<option value="${s.store_id}">${s.name}</option>`).join('');
+      for (const s of stores) {
+        _transferPatternsByStore[String(s.store_id)] = (s.transfer_vendors || []).map(p => String(p));
+      }
     } catch (e) {
       storeSel.innerHTML = '<option>加载失败</option>';
       addMsg('加载门店失败: ' + e.message, 'sys');
     }
+  }
+
+  // True when the vendor name matches any pattern in this store's
+  // transfer_vendors list (case-insensitive substring + regex).
+  function _isTransferVendor(storeId, vendorName) {
+    const pats = _transferPatternsByStore[String(storeId)] || [];
+    if (!pats.length || !vendorName) return false;
+    const v = String(vendorName).toLowerCase();
+    for (const p of pats) {
+      try {
+        if (new RegExp(p, 'i').test(v)) return true;
+      } catch (_e) {
+        if (v.includes(p.toLowerCase())) return true;
+      }
+    }
+    return false;
   }
 
   async function loadVendors(storeId) {
@@ -2546,23 +2571,24 @@
     }
   }
 
-  // Auto / manual fire: send BOTH channels (vendor + internal_transfer)
-  // for the given vendor entry. ctx must carry storeId / storeName /
-  // vendorId / vendorName. Reused by generatePO onDone (auto) and the
-  // vendor-email button click (manual).
+  // Auto / manual fire: send EXACTLY ONE email for the vendor entry,
+  // classified by stores.json transfer_vendors:
+  //   * transfer vendor (Briarwood / Long Happy / Wai M / Chong Qing
+  //     etc.) -> internal_transfer channel + bottles list
+  //   * else (regular ORDER vendor: Empire / Southern / Opici / ...) ->
+  //     vendor_<slug> channel + cases list
+  // ctx must carry storeId / storeName / vendorId / vendorName.
   async function emailSendForVendor(vendorEntry, ctx) {
-    const cases = buildCopyText(vendorEntry);
-    const stock = buildStockText(vendorEntry);
-    const tasks = [];
-    if (cases) {
-      tasks.push(_emailSendOne(_vendorChannelKey(ctx.vendorName), cases, 'order', ctx));
+    const isTransfer = _isTransferVendor(ctx.storeId, ctx.vendorName);
+    const body = isTransfer ? buildStockText(vendorEntry) : buildCopyText(vendorEntry);
+    if (!body) {
+      return { sent: 0, total: 0 };
     }
-    if (stock) {
-      tasks.push(_emailSendOne('internal_transfer', stock, 'transfer', ctx));
-    }
-    const results = await Promise.all(tasks);
-    const okCount = results.filter(r => r && r.status === 'sent').length;
-    return { sent: okCount, total: tasks.length };
+    const channel = isTransfer ? 'internal_transfer' : _vendorChannelKey(ctx.vendorName);
+    const kind = isTransfer ? 'transfer' : 'order';
+    const r = await _emailSendOne(channel, body, kind, ctx);
+    const okCount = (r && r.status === 'sent') ? 1 : 0;
+    return { sent: okCount, total: 1 };
   }
 
   // URL-driven auto-regen: when the page opens with ?regen=<store>:<vendor>,
