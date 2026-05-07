@@ -1868,6 +1868,24 @@
             // back to the dropdown only when no hint applies (manual
             // single-vendor flow).
             const _hint = (window._currentBatchVendor || _currentBatchVendor || null);
+            // Look up vendor name from the *current* dropdown options by
+            // VID match, not by selectedIndex. By the time onDone fires
+            // the user may have changed the selector, in which case
+            // vendorSel.selectedOptions[0].text would be the wrong vendor's
+            // (or the localized placeholder). Matching by value pins the
+            // name to the gen we actually started.
+            let vendorNameFromDom = '';
+            for (const opt of vendorSel.options) {
+              if (opt.value === vid && opt.text) {
+                vendorNameFromDom = opt.text; break;
+              }
+            }
+            let storeNameFromDom = '';
+            for (const opt of storeSel.options) {
+              if (opt.value === sid && opt.text) {
+                storeNameFromDom = opt.text; break;
+              }
+            }
             const entry = {
               id: existing ? existing.id
                            : 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
@@ -1875,12 +1893,12 @@
               storeName:
                 (_hint && _hint.storeId === sid && _hint.storeName)
                   ? _hint.storeName
-                  : (storeSel.selectedOptions[0]?.text || sid),
+                  : (storeNameFromDom || (existing && existing.storeName) || sid),
               vendorId: vid,
               vendorName:
                 (_hint && _hint.vendorId === vid && _hint.vendorName)
                   ? _hint.vendorName
-                  : (vendorSel.selectedOptions[0]?.text || vid),
+                  : (vendorNameFromDom || (existing && existing.vendorName) || vid),
               ts: Date.now(),
               markdown: poBuffer,
               cases: totals.cases,
@@ -2119,14 +2137,23 @@
     try {
       const raw = localStorage.getItem(PANEL_KEY);
       let p = raw ? JSON.parse(raw) : null;
-      // Same defensive unwrap as loadHistory: tolerate a Zustand
-      // {state: {vendors: [...]}, version: N} blob that an earlier
-      // React build may have written under this key.
       if (p && !Array.isArray(p.vendors) && p.state &&
           Array.isArray(p.state.vendors)) {
         p = p.state;
       }
       _poPanel = (p && Array.isArray(p.vendors)) ? p : { vendors: [] };
+      // Drop entries with no usable identifier -- can't render meaningfully,
+      // can't act on them (no email channel, no regen route). Keeps the
+      // panel from showing blank cards left over from broken gen runs.
+      const before = _poPanel.vendors.length;
+      _poPanel.vendors = _poPanel.vendors.filter(v =>
+        v && (v.vendorName || v.vendorId));
+      const dropped = before - _poPanel.vendors.length;
+      if (dropped > 0) {
+        console.log('[loadPanel] dropped %d unusable entries (no name/id)',
+          dropped);
+        savePanel();
+      }
       console.log('[loadPanel] %d vendors restored from localStorage',
         _poPanel.vendors.length);
     } catch (e) {
@@ -2786,6 +2813,27 @@
       const data = await resp.json();
       const items = data.items || [];
       if (!items.length) return;
+      // Self-heal: server preorders.json carries the canonical vendor_name.
+      // If a panel entry has empty/missing vendorName (race during gen
+      // onDone reading a stale dropdown), patch it from the server data
+      // so the card label appears instead of looking blank.
+      const byKey = new Map(items.map(it =>
+        [`${it.store_id}|${it.vendor_id}`, it]));
+      let healed = 0;
+      for (const v of (_poPanel.vendors || [])) {
+        if (v.vendorName) continue;
+        const it = byKey.get(`${v.storeId}|${v.vendorId}`);
+        if (it && it.vendor_name) {
+          v.vendorName = it.vendor_name;
+          if (!v.storeName && it.store_name) v.storeName = it.store_name;
+          healed += 1;
+        }
+      }
+      if (healed) {
+        console.log('[loadPreorders] healed %d panel entries with missing vendorName', healed);
+        savePanel();
+        renderPOPanel();
+      }
       // Dedup against BOTH the archive (_orderHistory) and the active panel
       // (_poPanel.vendors). Invariant: a single storeId|vendorId lives in
       // exactly one place. Without the panel half, panel vendors get
