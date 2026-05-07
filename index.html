@@ -1506,18 +1506,18 @@
     }
   }
 
-  // True when the vendor name matches any pattern in this store's
-  // transfer_vendors list (case-insensitive substring + regex).
+  // True when the vendor name contains any pattern in this store's
+  // transfer_vendors as a case-insensitive substring. Mirrors backend
+  // services/po_email_digest.py:classify_vendor verbatim so the
+  // single-vendor manual flow and the batch digest agree on which
+  // emails go to transfer vs order channels.
   function _isTransferVendor(storeId, vendorName) {
     const pats = _transferPatternsByStore[String(storeId)] || [];
     if (!pats.length || !vendorName) return false;
     const v = String(vendorName).toLowerCase();
     for (const p of pats) {
-      try {
-        if (new RegExp(p, 'i').test(v)) return true;
-      } catch (_e) {
-        if (v.includes(p.toLowerCase())) return true;
-      }
+      const needle = String(p || '').trim().toLowerCase();
+      if (needle && v.includes(needle)) return true;
     }
     return false;
   }
