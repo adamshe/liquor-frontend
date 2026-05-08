@@ -2099,6 +2099,18 @@
   // review surface.
   const PANEL_KEY = 'eip_po_panel_v1';
   let _poPanel = { vendors: [] };  // same shape as history entries
+
+  // Last-resort vendor name extraction: every PO markdown body the LLM
+  // emits starts with a section heading like
+  //   **Long Happy Ltd** | 184 cases | $41,797.99 | ...
+  // If a panel entry's vendorName field went missing (race during gen
+  // onDone, schema drift) we can recover the human-readable name from
+  // the section heading without any server round-trip.
+  function _vendorNameFromMarkdown(md) {
+    if (!md) return '';
+    const m = String(md).match(/^\s*\*\*([^*\n]+?)\*\*/);
+    return m ? m[1].trim() : '';
+  }
   // Hoisted here (earlier than its original location) so renderPOPanel
   // at startup can read it without TDZ ReferenceError.
   let _editingPO = null;  // { parsed, targetId, vendorEntry? }
@@ -2142,6 +2154,18 @@
         p = p.state;
       }
       _poPanel = (p && Array.isArray(p.vendors)) ? p : { vendors: [] };
+      // Self-heal blank vendorName from the markdown's first **heading**
+      // before deciding whether the entry is droppable. The LLM emits
+      // every section as `**Vendor Name** | N cases | ...`, so the
+      // human-readable name is recoverable even when the field is empty.
+      let healed = 0;
+      for (const v of _poPanel.vendors) {
+        if (!v) continue;
+        if (!v.vendorName) {
+          const fromMd = _vendorNameFromMarkdown(v.markdown);
+          if (fromMd) { v.vendorName = fromMd; healed++; }
+        }
+      }
       // Drop entries with no usable identifier -- can't render meaningfully,
       // can't act on them (no email channel, no regen route). Keeps the
       // panel from showing blank cards left over from broken gen runs.
@@ -2149,9 +2173,9 @@
       _poPanel.vendors = _poPanel.vendors.filter(v =>
         v && (v.vendorName || v.vendorId));
       const dropped = before - _poPanel.vendors.length;
-      if (dropped > 0) {
-        console.log('[loadPanel] dropped %d unusable entries (no name/id)',
-          dropped);
+      if (healed || dropped) {
+        if (healed) console.log('[loadPanel] healed %d entries from markdown', healed);
+        if (dropped) console.log('[loadPanel] dropped %d unusable entries (no name/id)', dropped);
         savePanel();
       }
       console.log('[loadPanel] %d vendors restored from localStorage',
@@ -2354,7 +2378,12 @@
       ${displayVendors.length} ${currentLang === 'en' ? 'vendors' : '家供应商'}
     </div>`;
     poBody.innerHTML = summaryHTML + displayVendors.map(v => {
-      const nm = escapeHtml(v.vendorName || v.vendorId || '');
+      // Fallback chain: explicit field -> markdown heading -> vid hash.
+      // The markdown step rescues stale entries from before the
+      // gen-onDone vid-match fix.
+      const nm = escapeHtml(
+        v.vendorName || _vendorNameFromMarkdown(v.markdown) || v.vendorId || '',
+      );
       const id = escapeHtml(v.id || '');
       // Recompute stats from markdown rows every render -- trust the
       // parser, not any stored cases/amount (which may be stale zeros
