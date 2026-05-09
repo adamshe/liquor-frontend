@@ -648,8 +648,10 @@
     transform: rotate(90deg);
   }
   #po .vendor-name {
-    min-width: 0; color: var(--text);
-    overflow: hidden; text-overflow: wrap; white-space: nowrap;
+    flex: 1 1 auto;       /* take remaining width inside the flex row */
+    min-width: 0;
+    color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   #po .vendor-total-cases,
   #po .vendor-total-amount {
