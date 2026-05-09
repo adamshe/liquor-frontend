@@ -607,9 +607,10 @@
     display: grid;
     /* 6 tracks match body table: product | select | stock | case | amount | notes.
        Last track 1fr absorbs remaining width same as table's auto col.
-       First track widened from 260 -> 360 so vendor name + 6 action
-       icons fit without the name collapsing to 0 width. */
-    grid-template-columns: 360px 32px 85px 65px 95px 1fr;
+       First track widened from 260 -> 400 so vendor name + 6 action
+       icons fit comfortably even for the longest vendor names
+       ("Monsieur Touton Selection", "Opici Family rndc Distributing"). */
+    grid-template-columns: 400px 32px 85px 65px 95px 1fr;
     align-items: center;
     padding: 8px 12px;
     font-size: 14px; font-weight: 600;
