@@ -606,8 +606,10 @@
     cursor: pointer; user-select: none; list-style: none;
     display: grid;
     /* 6 tracks match body table: product | select | stock | case | amount | notes.
-       Last track 1fr absorbs remaining width same as table's auto col. */
-    grid-template-columns: 260px 32px 85px 65px 95px 1fr;
+       Last track 1fr absorbs remaining width same as table's auto col.
+       First track widened from 260 -> 360 so vendor name + 6 action
+       icons fit without the name collapsing to 0 width. */
+    grid-template-columns: 360px 32px 85px 65px 95px 1fr;
     align-items: center;
     padding: 8px 12px;
     font-size: 14px; font-weight: 600;
@@ -672,7 +674,12 @@
   }
   #po .vendor-total-cases { grid-column: 4; color: var(--muted); }
   #po .vendor-total-amount { grid-column: 5; color: var(--accent); font-weight: 600; }
-  #po .vendor-actions { display: inline-flex; gap: 2px; margin-left: 4px; flex: 0 0 auto; }
+  /* Allow actions to shrink (was flex: 0 0 auto, which kept the icon
+     row at full natural width and stole all space from .vendor-name). */
+  #po .vendor-actions {
+    display: inline-flex; gap: 2px; margin-left: 4px;
+    flex: 0 1 auto !important; min-width: 0 !important;
+  }
   /* Touch-friendly: min 36px tap target so iPhone thumbs hit reliably. */
   #po .vendor-copy, #po .vendor-stock-copy, #po .vendor-email, #po .vendor-edit, #po .vendor-retire, #po .vendor-close {
     background: transparent; border: none; color: var(--muted);
