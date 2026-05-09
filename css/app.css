@@ -647,11 +647,18 @@
   #po details.vendor-panel[open] > summary .vendor-head-left::before {
     transform: rotate(90deg);
   }
+  /* `!important` is intentional here: long-lived browser caches were
+     serving the old (broken) rule that collapsed the name span to
+     width 0. Bumping specificity guarantees the fix wins even if a
+     stale Cloudflare/browser cache hands back an outdated stylesheet
+     that is then composed against fresh HTML. */
   #po .vendor-name {
-    flex: 1 1 auto;       /* take remaining width inside the flex row */
-    min-width: 0;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
     color: var(--text); font-weight: 500;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
   }
   #po .vendor-total-cases,
   #po .vendor-total-amount {
