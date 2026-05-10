@@ -650,6 +650,24 @@
   #po details.vendor-panel[open] > summary .vendor-head-left::before {
     transform: rotate(90deg);
   }
+  /* Interactive filter bar above each vendor PO table. `filter-selected`
+     class on the wrapper hides any row whose .po-select is unchecked
+     -- gives the operator an ad-hoc per-vendor "send only these" view
+     without rewriting the markdown. Same checkboxes that drive Retire. */
+  .po-filter-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 10px; font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .po-filter-bar label {
+    display: inline-flex; align-items: center; gap: 4px;
+    cursor: pointer; user-select: none;
+  }
+  .po-filter-bar .po-filter-hint { opacity: 0.7; }
+  .po-main-wrap.filter-selected tbody tr:not(.row-selected) {
+    display: none !important;
+  }
+
   /* `!important` is intentional here: long-lived browser caches were
      serving the old (broken) rule that collapsed the name span to
      width 0. Bumping specificity guarantees the fix wins even if a

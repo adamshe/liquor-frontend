@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=20260509c">
+<link rel="stylesheet" href="css/app.css?v=20260510a">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
@@ -1271,7 +1271,18 @@
         <td class="col-priority"><span class="prio-badge prio-${prio}">${prioLabel}</span></td>
       </tr>`;
     }).join('');
-    return `<table class="po-main-table" data-new-table="1">
+    // Interactive filter bar: "All" (default, shows everything) vs
+    // "Selected" (hides rows whose .po-select checkbox is unchecked).
+    // Same checkbox state drives both this filter and the Retire blacklist.
+    // Empty `name` attr -> radios in different vendor cards do not collide.
+    const filterBar = `<div class="po-filter-bar">
+        <label><input type="radio" class="po-filter-radio" value="all" checked> All</label>
+        <label><input type="radio" class="po-filter-radio" value="selected"> Selected</label>
+        <span class="po-filter-hint">${currentLang === 'en'
+          ? '(Selected: copy + email only checked rows)'
+          : '(Selected: 复制+邮件 只发已勾的行)'}</span>
+      </div>`;
+    return filterBar + `<table class="po-main-table" data-new-table="1">
       <thead><tr>${head}</tr></thead>
       <tbody>${body || '<tr><td colspan="7" class="placeholder">_(无订单行)_</td></tr>'}</tbody>
     </table>`;
@@ -2458,15 +2469,23 @@
   drawerToggleEl.addEventListener('click', () => {
     drawerEl.classList.toggle('open');
   });
-  function buildCopyText(entry) {
+  function buildCopyText(entry, selectedNames) {
     // Salesman-friendly short form: one product per line, "name x N cases".
     // Skip rows whose cases is 0 (user deleted / no order).
+    //   selectedNames: optional Set<string> of product names (lowercased).
+    //     When given, only rows whose product matches are emitted -- used
+    //     by the "Selected" filter to mail/copy just the picked items.
     const parsed = parsePOMarkdown(entry.markdown || '');
     const lines = [`${entry.vendorName || entry.vendorId || 'Order'}:`];
     for (const s of parsed.sections) {
       for (const r of s.rows) {
         const n = r.cases || 0;
-        if (n > 0) lines.push(`${r.product} x ${n}`);
+        if (n > 0) {
+          if (selectedNames && !selectedNames.has((r.product || '').toLowerCase())) {
+            continue;
+          }
+          lines.push(`${r.product} x ${n}`);
+        }
       }
     }
     return lines.join('\n');
@@ -2486,7 +2505,7 @@
     return 6;
   }
 
-  function buildStockText(entry) {
+  function buildStockText(entry, selectedNames) {
     // Low-stock transfer-in candidate list. ONLY rows that:
     //   1. The system actually wants to reorder (cases > 0 -- proxy for
     //      "this product has sales / is being managed"), AND
@@ -2495,6 +2514,8 @@
     // Pastes into Excel as two columns; reviewer scans for transfers
     // from a sister store. Skips rows where stock is unknown (can't
     // judge "low" without a number) and discontinued sections.
+    //   selectedNames: optional Set<string> of product names (lowercased).
+    //     When given, only matching rows are emitted -- "Selected" filter.
     const parsed = parsePOMarkdown(entry.markdown || '');
     const stockMap = _productStockMap();   // name(lower) -> qty_on_hand (bottles)
     const STOCK_RX = /(?:库存|在库|现库|stock|instock)\s*[:：]?\s*(-?\d+)/i;
@@ -2504,6 +2525,7 @@
       if (/建议退役|retire|discontinu/i.test(s.title)) continue;
       for (const r of s.rows) {
         if (!r.product) continue;
+        if (selectedNames && !selectedNames.has(r.product.toLowerCase())) continue;
         // Sales gate: cases > 0 in this PO means LLM allocated reorder
         // for it = product is selling and managed.
         if (!(Number(r.cases) > 0)) continue;
@@ -2634,9 +2656,13 @@
   //   * else (regular ORDER vendor: Empire / Southern / Opici / ...) ->
   //     vendor_<slug> channel + cases list
   // ctx must carry storeId / storeName / vendorId / vendorName.
+  //   ctx.selectedNames: optional Set<string> from the "Selected" filter --
+  //     restricts the email body to those product names.
   async function emailSendForVendor(vendorEntry, ctx) {
     const isTransfer = _isTransferVendor(ctx.storeId, ctx.vendorName);
-    const body = isTransfer ? buildStockText(vendorEntry) : buildCopyText(vendorEntry);
+    const body = isTransfer
+      ? buildStockText(vendorEntry, ctx.selectedNames)
+      : buildCopyText(vendorEntry, ctx.selectedNames);
     if (!body) {
       return { sent: 0, total: 0 };
     }
@@ -2645,6 +2671,23 @@
     const r = await _emailSendOne(channel, body, kind, ctx);
     const okCount = (r && r.status === 'sent') ? 1 : 0;
     return { sent: okCount, total: 1 };
+  }
+
+  // Read the current filter state for the vendor card that contains
+  // `clickedElt`. Returns a Set<lowercased product name> when the
+  // user has the "Selected" radio active (so we filter to checked
+  // rows). Returns null when "All" is active (no filter).
+  function _selectedFilterSet(clickedElt) {
+    const vendor = clickedElt.closest('.vendor-panel');
+    if (!vendor) return null;
+    const wrap = vendor.querySelector('.po-main-wrap.filter-selected');
+    if (!wrap) return null;
+    const out = new Set();
+    wrap.querySelectorAll('.po-select:checked').forEach(cb => {
+      const p = (cb.dataset.product || '').toLowerCase();
+      if (p) out.add(p);
+    });
+    return out;
   }
 
   // URL-driven auto-regen: when the page opens with ?regen=<store>:<vendor>,
@@ -3728,6 +3771,16 @@
       _syncVendorRetireEnabled(rowSel);
       return;
     }
+    // Filter radio: All shows everything; Selected hides rows whose
+    // .po-select is unchecked. Copy + email buttons read the same DOM
+    // state when filter=selected.
+    const filterRadio = e.target.closest('.po-filter-radio');
+    if (filterRadio) {
+      const wrap = filterRadio.closest('.po-main-wrap');
+      if (!wrap) return;
+      wrap.classList.toggle('filter-selected', filterRadio.value === 'selected');
+      return;
+    }
     // Restore from retire panel.
     const restoreBtn = e.target.closest('.retire-restore');
     if (restoreBtn) {
@@ -3747,7 +3800,14 @@
       const v = _poPanel.vendors.find(x => x.id === vendorCopyBtn.dataset.id);
       if (!v) return;
       try {
-        await copyToClipboard(buildCopyText(v));
+        const sel = _selectedFilterSet(vendorCopyBtn);
+        if (sel && sel.size === 0) {
+          addMsg(currentLang === 'en'
+            ? 'Filter is "Selected" but nothing checked.'
+            : '过滤=Selected 但没勾任何行', 'sys');
+          return;
+        }
+        await copyToClipboard(buildCopyText(v, sel));
         vendorCopyBtn.innerHTML = ICON_CHECK;
         vendorCopyBtn.classList.add('copied');
         setTimeout(() => {
@@ -3765,7 +3825,14 @@
       const v = _poPanel.vendors.find(x => x.id === vendorStockCopyBtn.dataset.id);
       if (!v) return;
       try {
-        const text = buildStockText(v);
+        const sel = _selectedFilterSet(vendorStockCopyBtn);
+        if (sel && sel.size === 0) {
+          addMsg(currentLang === 'en'
+            ? 'Filter is "Selected" but nothing checked.'
+            : '过滤=Selected 但没勾任何行', 'sys');
+          return;
+        }
+        const text = buildStockText(v, sel);
         if (!text) {
           addMsg('无低库存项 (cases=0 或 stock 充足)', 'sys');
           return;
@@ -3788,6 +3855,13 @@
       e.preventDefault(); e.stopPropagation();
       const v = _poPanel.vendors.find(x => x.id === vendorEmailBtn.dataset.id);
       if (!v) return;
+      const selSet = _selectedFilterSet(vendorEmailBtn);
+      if (selSet && selSet.size === 0) {
+        addMsg(currentLang === 'en'
+          ? 'Filter is "Selected" but nothing checked -- email not sent.'
+          : '过滤=Selected 但没勾任何行, 没发邮件', 'sys');
+        return;
+      }
       vendorEmailBtn.disabled = true;
       try {
         const res = await emailSendForVendor(v, {
@@ -3795,6 +3869,7 @@
           storeName: v.storeName,
           vendorId: v.vendorId,
           vendorName: v.vendorName,
+          selectedNames: selSet,
         });
         if (res.sent === 0) {
           addMsg('邮件: 0 封 (检查 config/email_channels.yaml)', 'sys');
