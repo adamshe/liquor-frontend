@@ -2364,6 +2364,17 @@
     const displayVendors = currentStoreId
       ? (_poPanel.vendors || []).filter(v => v.storeId === currentStoreId)
       : [];
+    // Sort: vendor company name asc (case-insensitive), tie-break by ts
+    // desc so the newest gen surfaces first within a same-name group.
+    // Same fallback chain as the rendered <span class="vendor-name">.
+    function _sortKey(v) {
+      return (v.vendorName || _vendorNameFromMarkdown(v.markdown) || v.vendorId || '');
+    }
+    displayVendors.sort((a, b) => {
+      const cmp = _sortKey(a).localeCompare(_sortKey(b), undefined, { sensitivity: 'base' });
+      if (cmp !== 0) return cmp;
+      return (b.ts || 0) - (a.ts || 0);
+    });
     if (displayVendors.length === 0) {
       poBody.className = '';
       poBody.innerHTML = `<div class="placeholder">${t('placeholder.po_init')}</div>`;
@@ -2405,8 +2416,11 @@
       const mdHtml = window.marked
         ? window.marked.parse(v.markdown || '')
         : escapeHtml(v.markdown || '');
+      const genAtTxt = v.ts ? new Date(v.ts).toLocaleString() : '';
+      const genTipLabel = currentLang === 'en' ? 'Generated at' : '订单生成时间';
+      const genTip = genAtTxt ? escapeHtml(`${genTipLabel}: ${genAtTxt}`) : '';
       return `<details class="vendor-panel" data-vendor-id="${id}" data-state-key="vendor:${id}" open>
-        <summary class="vendor-panel-head" onclick="if(event.target.closest('.vendor-actions')){event.preventDefault();}">
+        <summary class="vendor-panel-head" title="${genTip}" onclick="if(event.target.closest('.vendor-actions')){event.preventDefault();}">
           <span class="vendor-head-left">
             <span class="vendor-name">${nm}</span>
             <span class="vendor-actions">
